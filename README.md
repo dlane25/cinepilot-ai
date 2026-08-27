@@ -23,51 +23,65 @@ CinePilot demonstrates real business value by:
 
 To demonstrate the platform's value, we use a fictional feature film called **ECHO POINT**.
 
-**Current Milestone 1 Capabilities (Implemented Now):**
-- **Command Center Foundation:** A cinematic, responsive, enterprise-quality dashboard built with Next.js and Tailwind CSS.
-- **Deterministic Production Model:** Robust TypeScript domain models representing production health, schedules, and financials.
-- **Production Intelligence Presentation:** Visualization of schedule/budget insights and a dedicated production risks panel.
-- **Governed Agent Architecture:** A demonstration of how future specialized agents (Director, Producer, Scheduling, Continuity, Risk, Optimizer) will interact with the human approval queue.
-- **Impact Summary:** Clear, measurable projections comparing the current plan against an optimized, AI-recommended plan.
+**Current Capabilities (Implemented Now):**
+- **Command Center Foundation (Milestone 1):** A cinematic, responsive, enterprise-quality dashboard built with Next.js and Tailwind CSS representing our ECHO POINT fictional film scenario.
+- **Python ADK Agent Service (Milestone 2):** An authoritative, type-safe Python backend utilizing Google's Agent Development Kit (ADK) and Gemini via Vertex AI. The backend features a strict Explicit Pipeline:
+  - **Director Agent:** Performs deep screenplay and scene creative breakdowns, departments requirement identification, and risk assessments.
+  - **Producer Agent:** Runs downstream financial/operational analysis on the Director's output to find cost-saving opportunities and scheduling optimizations.
+  - **Pydantic Validation Boundaries:** Prevents malformed LLM responses from entering downstream workflows using strict schema checks.
+- **Offline testing / Live verification:** Complete mock-friendly backend test suite allowing developers to run pytest offline, and a separate, secure live Vertex script to test active Google Cloud ADC authentication.
 
-*Disclaimer: The current Milestone 1 application runs on deterministic demo fixture data. No live AI, Gemini inference, or backend autonomous orchestration is currently executing.*
+*Disclaimer: The Next.js frontend currently runs on deterministic demo fixture data for presentation stability. The backend Python agent-service runs independently with its own mock testing and live Vertex verification scripts in this milestone.*
 
-## Architecture Direction (Planned)
+## Architecture
 
 CinePilot AI utilizes a hybrid application architecture:
 
-- **Frontend (Current):** Next.js App Router, React, TypeScript, Tailwind CSS.
-- **Agent Runtime (Planned):** Python service utilizing the Google Agent Development Kit (ADK).
-- **Intelligence Layer (Planned):** Google Gemini and Vertex AI for reasoning and unstructured data extraction.
-- **Agent Orchestration (Planned):** Vertex AI Agent Engine.
+- **Frontend:** Next.js App Router, React, TypeScript, Tailwind CSS.
+- **Agent Backend:** FastAPI Python service utilizing the Google Agent Development Kit (ADK) and `google-genai` SDK.
+- **Intelligence Layer:** Google Gemini 2.0 and Vertex AI for reasoning and structured data extraction.
+- **Agent Orchestration:** Vertex AI Agent Engine.
 - **Production Memory (Planned):** ClickHouse Cloud with official MCP integrations.
 
 ## Local Development
 
-### Installation
+### Frontend Installation & Validation
+
+To set up and run the Next.js frontend command center:
 
 ```bash
+# Install Node dependencies
 npm install
-```
 
-### Validation Commands
-
-Ensure the codebase meets engineering standards before committing:
-
-```bash
+# Run Frontend Validations
 npm run lint       # Run ESLint
 npm run typecheck  # Validate TypeScript strictly
 npm test           # Run Vitest domain calculations
 npm run build      # Validate the Next.js production build
-```
 
-### Starting the Development Server
-
-```bash
+# Start the dev server
 npm run dev
 ```
 
-Then open [http://localhost:3000](http://localhost:3000) in your browser.
+### Backend Installation & Validation
+
+To set up and run the Python ADK Agent Service:
+
+```bash
+cd agent-service
+
+# Create virtual environment
+python -m venv .venv
+.venv\Scripts\Activate.ps1   # (On Windows PowerShell)
+
+# Install Python dependencies
+pip install -e .
+
+# Run Backend Validations
+ruff check                  # Lint python codebase
+pytest                      # Run offline tests
+python tests/live_vertex_verification.py  # (Optional) Live Vertex AI ADC check
+```
 
 ## Project Structure
 
@@ -77,11 +91,12 @@ Then open [http://localhost:3000](http://localhost:3000) in your browser.
 - `/lib/fixtures` - Deterministic demo data (ECHO POINT).
 - `/types` - TypeScript domain models defining the production intelligence contracts.
 - `/tests` - Vitest test suites verifying financial invariants and domain calculations.
+- `/agent-service` - Authoritative Python backend agent pipeline using FastAPI, Pydantic v2, and Google ADK.
 
 ## Milestone Roadmap
 
 - [x] **Milestone 1:** Command Center Foundation (UI and Deterministic Models).
-- [ ] **Milestone 2:** Python ADK Agent Service.
+- [x] **Milestone 2:** Python ADK Agent Service.
 - [ ] **Milestone 3:** Gemini + Vertex AI Integration.
 - [ ] **Milestone 4:** ClickHouse Production Memory.
 - [ ] **Milestone 5:** Screenplay Intelligence (Parsing & Ingestion).
