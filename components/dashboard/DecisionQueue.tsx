@@ -5,9 +5,11 @@ import { Inbox, CheckCircle2, XCircle, Clock } from "lucide-react";
 
 interface DecisionQueueProps {
   recommendations: ProductionRecommendation[];
+  onApprove?: (id: string) => void;
+  onReject?: (id: string) => void;
 }
 
-export function DecisionQueue({ recommendations }: DecisionQueueProps) {
+export function DecisionQueue({ recommendations, onApprove, onReject }: DecisionQueueProps) {
   return (
     <section className="mb-8">
       <h2 className="text-lg font-semibold text-white mb-4 flex items-center gap-2">
@@ -33,10 +35,10 @@ export function DecisionQueue({ recommendations }: DecisionQueueProps) {
                 {rec.approvalState}
               </span>
             </div>
-            
+
             <h3 className="text-base font-semibold text-white mb-2">{rec.title}</h3>
             <p className="text-sm text-slate-400 mb-5 flex-1">{rec.explanation}</p>
-            
+
             <div className="bg-slate-950 rounded-lg p-3 mb-5 border border-slate-800/50 flex justify-between items-center">
               <div>
                 <div className="text-xs text-slate-500 mb-0.5">Projected Value</div>
@@ -53,13 +55,15 @@ export function DecisionQueue({ recommendations }: DecisionQueueProps) {
             </div>
 
             <div className="flex gap-2">
-              <button 
+              <button
+                onClick={() => onApprove?.(rec.id)}
                 disabled={rec.approvalState !== 'Pending Review'}
                 className="flex-1 bg-indigo-600 hover:bg-indigo-500 disabled:bg-slate-800 disabled:text-slate-500 text-white text-sm font-medium py-2 rounded-md transition-colors"
               >
                 Approve
               </button>
-              <button 
+              <button
+                onClick={() => onReject?.(rec.id)}
                 disabled={rec.approvalState !== 'Pending Review'}
                 className="flex-1 bg-slate-800 hover:bg-slate-700 disabled:bg-slate-900/50 disabled:text-slate-600 text-white text-sm font-medium py-2 rounded-md border border-slate-700 disabled:border-slate-800 transition-colors"
               >
