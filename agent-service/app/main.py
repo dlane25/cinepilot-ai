@@ -1,9 +1,10 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.api import agents, health
+from app.api import agents, health, memory
 from app.config.settings import settings
 from app.core.logging import logger
+from app.memory.service import ProductionMemoryService
 
 app = FastAPI(
     title="CinePilot AI - Python ADK Agent Service",
@@ -23,6 +24,7 @@ app.add_middleware(
 # Register routes
 app.include_router(health.router, tags=["Health"])
 app.include_router(agents.router, prefix="/api/v1", tags=["Agents"])
+app.include_router(memory.router, prefix="/api/v1", tags=["Memory"])
 
 @app.on_event("startup")
 def on_startup():
@@ -32,3 +34,7 @@ def on_startup():
     logger.info(f"Vertex AI Mode: {settings.google_genai_use_vertexai}")
     logger.info(f"Target Region: {settings.google_cloud_location}")
     logger.info("==================================================")
+
+    # Initialize and bootstrap ClickHouse schemas
+    memory_service = ProductionMemoryService()
+    memory_service.bootstrap_db()
