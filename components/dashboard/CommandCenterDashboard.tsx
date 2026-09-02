@@ -1,11 +1,11 @@
 "use client";
 
-import React, { useState } from "react";
-import { 
-  echoPointProduction, 
-  echoPointInsights, 
-  echoPointAgentActivity, 
-  echoPointRisks, 
+import React, { useState, useEffect } from "react";
+import {
+  echoPointProduction,
+  echoPointInsights,
+  echoPointAgentActivity,
+  echoPointRisks,
   echoPointRecommendations,
   echoPointImpactProjection
 } from "../../lib/fixtures/echo-point";
@@ -17,7 +17,7 @@ import { RiskPanel } from "./RiskPanel";
 import { LiveAnalysisSummary } from "./LiveAnalysisSummary";
 import { ProductionHeader } from "../layout/ProductionHeader";
 
-import { 
+import {
   ProductionAnalysisResponse,
   Production,
   ProductionRisk,
@@ -26,28 +26,73 @@ import {
   ImpactProjection
 } from "../../types";
 
-import { 
-  mapLiveProduction, 
-  mapLiveRisks, 
-  mapLiveInsights, 
-  mapLiveRecommendations 
+import {
+  mapLiveProduction,
+  mapLiveRisks,
+  mapLiveInsights,
+  mapLiveRecommendations
 } from "../../lib/mappers/production-analysis";
 
 import { generateImpactProjection } from "../../lib/domain/calculations";
-import { Cpu, Play, Loader2, AlertCircle, RefreshCw } from "lucide-react";
+import { Cpu, Play, Loader2, AlertCircle, RefreshCw, Database, Clock, CheckSquare } from "lucide-react";
 
 type AnalysisState = "IDLE" | "ANALYZING" | "SUCCESS" | "ERROR";
 type DashboardMode = "DEMO" | "LIVE";
+
+interface HistoricalAnalysisRun {
+  scene_number: string;
+  completed_at: string;
+  model: string;
+  runtime: string;
+  total_opportunity_count: number;
+  projected_savings: string | number;
+}
+
+interface HistoricalRecommendation {
+  title: string;
+  projected_savings: string | number;
+  confidence: number;
+  approval_state: string;
+}
+
+interface MemoryHistoryState {
+  analyses: HistoricalAnalysisRun[];
+  risks: unknown[];
+  recommendations: HistoricalRecommendation[];
+}
 
 export function CommandCenterDashboard() {
   const [state, setState] = useState<AnalysisState>("IDLE");
   const [mode, setMode] = useState<DashboardMode>("DEMO");
   const [rawResponse, setRawResponse] = useState<ProductionAnalysisResponse | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
-  
+
   // Stored state for active recommendations (so user can Approve/Reject them in real-time)
   const [liveRecommendations, setLiveRecommendations] = useState<ProductionRecommendation[]>([]);
   const [demoRecommendations, setDemoRecommendations] = useState<ProductionRecommendation[]>(echoPointRecommendations);
+
+  // ClickHouse Production Memory state
+  const [memoryHistory, setMemoryHistory] = useState<MemoryHistoryState | null>(null);
+  const [refreshTrigger, setRefreshTrigger] = useState(0);
+
+  useEffect(() => {
+    let active = true;
+    const loadMemory = async () => {
+      try {
+        const res = await fetch("/api/production-memory/history?production_id=prod-echopoint-001");
+        if (res.ok && active) {
+          const data = await res.json();
+          setMemoryHistory(data);
+        }
+      } catch (err) {
+        console.warn("[FRONTEND] Failed to connect to ClickHouse memory service:", err);
+      }
+    };
+    loadMemory();
+    return () => {
+      active = false;
+    };
+  }, [refreshTrigger]);
 
   const handleRunAnalysis = async () => {
     setState("ANALYZING");
@@ -86,11 +131,14 @@ export function CommandCenterDashboard() {
       }
 
       const responseData = (await res.json()) as ProductionAnalysisResponse;
-      
+
       setRawResponse(responseData);
       setLiveRecommendations(mapLiveRecommendations(responseData));
       setState("SUCCESS");
       setMode("LIVE");
+
+      // Reload ClickHouse history trigger
+      setRefreshTrigger(prev => prev + 1);
 
     } catch (err: unknown) {
       console.error("[FRONTEND] Live production analysis failed:", err);
@@ -100,27 +148,73 @@ export function CommandCenterDashboard() {
     }
   };
 
-  const handleApproveRecommendation = (id: string) => {
-    if (mode === "LIVE") {
-      setLiveRecommendations(prev => 
+  const handleApproveRecommendation = async (id: string) => {
+    const isLive = mode === "LIVE";
+
+    // Optimistic UI update
+    if (isLive) {
+      setLiveRecommendations(prev =>
         prev.map(rec => rec.id === id ? { ...rec, approvalState: "Approved" as const } : rec)
       );
     } else {
-      setDemoRecommendations(prev => 
+      setDemoRecommendations(prev =>
         prev.map(rec => rec.id === id ? { ...rec, approvalState: "Approved" as const } : rec)
       );
     }
+
+    // Persist human decision record to ClickHouse via MCP
+    try {
+      await fetch("/api/production-memory/decisions", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          recommendation_id: id,
+          production_id: "prod-echopoint-001",
+          decision: "Approved",
+          notes: "Approved via ClickHouse human-in-the-loop audit trail."
+        }),
+      });
+      // Refresh the historical trigger
+      setRefreshTrigger(prev => prev + 1);
+    } catch (err) {
+      console.error("[FRONTEND] Failed to log decision to ClickHouse:", err);
+    }
   };
 
-  const handleRejectRecommendation = (id: string) => {
-    if (mode === "LIVE") {
-      setLiveRecommendations(prev => 
+  const handleRejectRecommendation = async (id: string) => {
+    const isLive = mode === "LIVE";
+
+    // Optimistic UI update
+    if (isLive) {
+      setLiveRecommendations(prev =>
         prev.map(rec => rec.id === id ? { ...rec, approvalState: "Rejected" as const } : rec)
       );
     } else {
-      setDemoRecommendations(prev => 
+      setDemoRecommendations(prev =>
         prev.map(rec => rec.id === id ? { ...rec, approvalState: "Rejected" as const } : rec)
       );
+    }
+
+    // Persist human decision record to ClickHouse via MCP
+    try {
+      await fetch("/api/production-memory/decisions", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          recommendation_id: id,
+          production_id: "prod-echopoint-001",
+          decision: "Rejected",
+          notes: "Rejected via ClickHouse human-in-the-loop audit trail."
+        }),
+      });
+      // Refresh the historical trigger
+      setRefreshTrigger(prev => prev + 1);
+    } catch (err) {
+      console.error("[FRONTEND] Failed to log decision to ClickHouse:", err);
     }
   };
 
@@ -136,7 +230,7 @@ export function CommandCenterDashboard() {
     activeRisks = mapLiveRisks(rawResponse);
     activeInsights = mapLiveInsights(rawResponse);
     activeRecs = liveRecommendations;
-    
+
     // Recalculate impact projection dynamically based on actual live findings!
     activeProjection = generateImpactProjection(
       echoPointProduction.financials.projectedSpend,
@@ -219,7 +313,7 @@ export function CommandCenterDashboard() {
       </div>
 
       <div className="p-6 md:p-8 max-w-[1600px] mx-auto">
-        
+
         {/* Loader Progress Alert */}
         {state === "ANALYZING" && (
           <div className="bg-slate-900 border border-indigo-500/30 rounded-xl p-6 mb-8 text-center flex flex-col items-center justify-center py-10 shadow-lg animate-pulse">
@@ -240,7 +334,7 @@ export function CommandCenterDashboard() {
               <p className="text-sm text-rose-400/90 leading-relaxed mb-3">
                 {errorMessage}
               </p>
-              <button 
+              <button
                 onClick={handleRunAnalysis}
                 className="text-xs font-semibold bg-rose-500/10 hover:bg-rose-500/20 text-rose-300 px-3 py-1.5 rounded border border-rose-500/30 flex items-center gap-1.5 transition-colors"
               >
@@ -257,30 +351,119 @@ export function CommandCenterDashboard() {
         )}
 
         {/* Normal Dashboard Cards */}
-        <ProductionHealth 
-          production={activeProduction} 
-          risks={activeRisks} 
+        <ProductionHealth
+          production={activeProduction}
+          risks={activeRisks}
         />
-        
-        <ImpactSummary 
+
+        <ImpactSummary
           production={activeProduction}
           projection={activeProjection}
         />
-        
-        <IntelligenceFeed 
-          insights={activeInsights} 
-          activities={mode === "LIVE" ? [] : echoPointAgentActivity} 
+
+        <IntelligenceFeed
+          insights={activeInsights}
+          activities={mode === "LIVE" ? [] : echoPointAgentActivity}
         />
-        
-        <DecisionQueue 
-          recommendations={activeRecs} 
+
+        <DecisionQueue
+          recommendations={activeRecs}
           onApprove={handleApproveRecommendation}
           onReject={handleRejectRecommendation}
         />
 
-        <RiskPanel 
-          risks={activeRisks} 
+        <RiskPanel
+          risks={activeRisks}
         />
+
+        {/* CLICKHOUSE PRODUCTION MEMORY SECTION */}
+        {memoryHistory && (
+          <section className="bg-slate-950 border border-slate-800 rounded-xl p-6 mt-8">
+            <div className="flex items-center gap-2 mb-6 border-b border-slate-800 pb-4">
+              <Database className="w-5 h-5 text-indigo-400" />
+              <div className="flex flex-col">
+                <h2 className="text-lg font-bold text-white leading-tight">ClickHouse Production Memory Logs</h2>
+                <p className="text-xs text-slate-500 font-medium">Historical Multi-Agent Runs and Decisions fetched via official mcp-clickhouse</p>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+
+              {/* Recent Analyses Runs Card */}
+              <div className="bg-slate-900/60 border border-slate-800/80 rounded-xl p-5 flex flex-col h-[340px]">
+                <div className="flex items-center justify-between mb-4 pb-2 border-b border-slate-800/50">
+                  <div className="flex items-center gap-1.5 text-sm font-semibold text-slate-300">
+                    <Clock className="w-4 h-4 text-indigo-400" />
+                    <h4>Recent Analysis History</h4>
+                  </div>
+                  <span className="text-xs font-semibold text-slate-500 bg-slate-950 px-2 py-0.5 rounded-full border border-slate-800">
+                    {memoryHistory.analyses.length} Runs
+                  </span>
+                </div>
+
+                <div className="flex-1 overflow-y-auto space-y-2 pr-1 custom-scrollbar">
+                  {memoryHistory.analyses.map((run, i) => (
+                    <div key={i} className="bg-slate-950 border border-slate-850 p-3 rounded-lg flex justify-between items-center hover:border-slate-700 transition-colors">
+                      <div>
+                        <div className="flex items-center gap-2 mb-1">
+                          <span className="text-xs font-bold text-indigo-400">Scene {run.scene_number}</span>
+                          <span className="text-slate-600 text-xs">•</span>
+                          <span className="text-slate-500 text-[10px]">{new Date(run.completed_at).toLocaleDateString()}</span>
+                        </div>
+                        <p className="text-[11px] text-slate-400 line-clamp-1">Model: {run.model} | Runtime: {run.runtime}</p>
+                      </div>
+                      <div className="text-right">
+                        <span className="text-xs block font-bold text-emerald-400">+{parseFloat(String(run.projected_savings)).toLocaleString('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 })}</span>
+                        <span className="text-[9px] text-slate-500 block">Savings Opps: {run.total_opportunity_count}</span>
+                      </div>
+                    </div>
+                  ))}
+                  {memoryHistory.analyses.length === 0 && (
+                    <div className="text-center py-12 text-xs text-slate-600 italic">No historical runs recorded in ClickHouse.</div>
+                  )}
+                </div>
+              </div>
+
+              {/* Historical Decisions / Audit Trail Card */}
+              <div className="bg-slate-900/60 border border-slate-800/80 rounded-xl p-5 flex flex-col h-[340px]">
+                <div className="flex items-center justify-between mb-4 pb-2 border-b border-slate-800/50">
+                  <div className="flex items-center gap-1.5 text-sm font-semibold text-slate-300">
+                    <CheckSquare className="w-4 h-4 text-emerald-400" />
+                    <h4>Governance & Decision Log</h4>
+                  </div>
+                  <span className="text-xs font-semibold text-slate-500 bg-slate-950 px-2 py-0.5 rounded-full border border-slate-800">
+                    {memoryHistory.recommendations.filter(r => r.approval_state !== "Pending Review").length} Decisions
+                  </span>
+                </div>
+
+                <div className="flex-1 overflow-y-auto space-y-2 pr-1 custom-scrollbar">
+                  {memoryHistory.recommendations.map((rec, i) => (
+                    <div key={i} className="bg-slate-950 border border-slate-850 p-3 rounded-lg flex justify-between items-center hover:border-slate-700 transition-colors">
+                      <div className="flex-1 min-w-0 pr-3">
+                        <p className="text-xs font-semibold text-slate-300 truncate mb-1">{rec.title}</p>
+                        <p className="text-[10px] text-slate-500 line-clamp-1">Impact: {parseFloat(String(rec.projected_savings)).toLocaleString('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 })} | Confidence: {(rec.confidence * 100).toFixed(0)}%</p>
+                      </div>
+                      <div className="flex-shrink-0 text-right">
+                        <span className={`text-[10px] px-2 py-0.5 rounded-full border font-bold inline-flex items-center gap-1 uppercase ${
+                          rec.approval_state === "Approved" ? "bg-emerald-500/10 border-emerald-500/20 text-emerald-400" :
+                          rec.approval_state === "Rejected" ? "bg-rose-500/10 border-rose-500/20 text-rose-400" :
+                          "bg-amber-500/10 border-amber-500/20 text-amber-300 animate-pulse"
+                        }`}>
+                          {rec.approval_state}
+                        </span>
+                      </div>
+                    </div>
+                  ))}
+                  {memoryHistory.recommendations.length === 0 && (
+                    <div className="text-center py-12 text-xs text-slate-600 italic">No governance logs recorded in ClickHouse.</div>
+                  )}
+                </div>
+              </div>
+
+            </div>
+          </section>
+        )}
+
       </div>
     </>
   );

@@ -9,6 +9,7 @@ from app.agents.director import director_agent
 from app.agents.producer import producer_agent
 from app.core.errors import ModelValidationError
 from app.core.logging import logger
+from app.memory.service import ProductionMemoryService
 from app.models.production import ProductionAnalysisRequest
 from app.models.responses import (
     AgentMetadata,
@@ -27,10 +28,10 @@ def clean_and_parse_json(raw_text: str) -> dict:
     match = re.search(r"```(?:json)?\s*([\s\S]*?)\s*```", cleaned, re.IGNORECASE)
     if match:
         cleaned = match.group(1).strip()
-    
+
     # Strip any possible leading/trailing junk
     cleaned = cleaned.strip()
-    
+
     try:
         return json.loads(cleaned)
     except json.JSONDecodeError as e:
@@ -111,43 +112,44 @@ MOCK_PRODUCER_GENERAL = {
 async def analyze_production(payload: ProductionAnalysisRequest):
     """
     Executes the CinePilot Explicit Pipeline.
-    
+
     1. Triggers Director Agent -> Validates output
     2. Triggers Producer Agent -> Validates output
     3. Merges results & metadata
     """
     logger.info(f"Initiating analysis pipeline for production '{payload.production_id}', scene '{payload.scene_input.scene_number}'")
-    
+    started_at = datetime.now(UTC)
+
     # Determine if we should mock the run
     gcp_project = os.getenv("GOOGLE_CLOUD_PROJECT")
     force_mock = os.getenv("MOCK_AGENTS", "false").lower() == "true"
     is_mock = force_mock or gcp_project is None
-    
+
     if is_mock:
         logger.info("Executing pipeline in MOCK mode (no live Gemini calls).")
-        
+
     # --- STAGE 1: DIRECTOR AGENT ---
     director_prompt = f"""
     Analyze the following scene input and production context details.
-    
+
     Scene Number: {payload.scene_input.scene_number}
     Scene Heading: {payload.scene_input.scene_heading}
     INT/EXT: {payload.scene_input.int_ext}
     DAY/NIGHT: {payload.scene_input.day_night}
     Characters: {', '.join(payload.scene_input.characters)}
     Requirements identified: {', '.join(payload.scene_input.production_requirements)}
-    
+
     Production Budget: ${payload.production_context.approved_budget:,.2f}
     Projected Spend: ${payload.production_context.projected_spend:,.2f}
     Planned Days: {payload.production_context.planned_shooting_days}
     Current Day: {payload.production_context.current_shooting_day}
     """
-    
+
     # Resolve the correct mock response
     is_scene_42 = payload.scene_input.scene_number.strip() == "42"
     mock_dir_data = MOCK_DIRECTOR_RESPONSE_42 if is_scene_42 else MOCK_DIRECTOR_GENERAL
     mock_dir_str = json.dumps(mock_dir_data)
-    
+
     try:
         raw_director_out = await run_agent(
             agent=director_agent,
@@ -155,12 +157,12 @@ async def analyze_production(payload: ProductionAnalysisRequest):
             is_mock=is_mock,
             mock_response=mock_dir_str
         )
-        
+
         # Validation Boundary 1
         director_dict = clean_and_parse_json(raw_director_out)
         director_result = DirectorAnalysisResult(**director_dict)
         logger.info("Stage 1 (Director Analysis) completed and validated successfully.")
-        
+
     except ModelValidationError as e:
         logger.error(f"Director Agent schema validation failed: {e!s}")
         raise HTTPException(
@@ -173,31 +175,31 @@ async def analyze_production(payload: ProductionAnalysisRequest):
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Stage 1 (Director Agent) execution failed: {e!s}"
         ) from e
-        
+
     # --- STAGE 2: PRODUCER AGENT ---
     producer_prompt = f"""
     Evaluate the following creative breakdown and risk observations provided by the Director Agent.
     Provide financial, operational, and scheduling analysis within the context of our production boundaries.
-    
+
     Production Budget: ${payload.production_context.approved_budget:,.2f}
     Projected Spend: ${payload.production_context.projected_spend:,.2f}
     Planned Days: {payload.production_context.planned_shooting_days}
     Current Day: {payload.production_context.current_shooting_day}
-    
+
     --- Creative breakdown ---
     Scene Complexity: {director_result.scene_complexity}
     Location requirements: {', '.join(director_result.location_requirements)}
     Department requirements: {', '.join(director_result.production_requirements)}
     Cast requirements: {', '.join(director_result.cast_background_requirements)}
     Physical considerations: {director_result.physical_production_considerations}
-    
+
     --- Observed Risks ---
     {json.dumps([risk.model_dump() for risk in director_result.risk_observations], indent=2)}
     """
-    
+
     mock_prod_data = MOCK_PRODUCER_RESPONSE_42 if is_scene_42 else MOCK_PRODUCER_GENERAL
     mock_prod_str = json.dumps(mock_prod_data)
-    
+
     try:
         raw_producer_out = await run_agent(
             agent=producer_agent,
@@ -205,12 +207,12 @@ async def analyze_production(payload: ProductionAnalysisRequest):
             is_mock=is_mock,
             mock_response=mock_prod_str
         )
-        
+
         # Validation Boundary 2
         producer_dict = clean_and_parse_json(raw_producer_out)
         producer_result = ProducerAnalysisResult(**producer_dict)
         logger.info("Stage 2 (Producer Analysis) completed and validated successfully.")
-        
+
     except ModelValidationError as e:
         logger.error(f"Producer Agent schema validation failed: {e!s}")
         raise HTTPException(
@@ -223,7 +225,7 @@ async def analyze_production(payload: ProductionAnalysisRequest):
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Stage 2 (Producer Agent) execution failed: {e!s}"
         ) from e
-        
+
     # --- CONSOLIDATION ---
     response = ProductionAnalysisResponse(
         production_id=payload.production_id,
@@ -236,6 +238,14 @@ async def analyze_production(payload: ProductionAnalysisRequest):
             timestamp=datetime.now(UTC).isoformat()
         )
     )
-    
+
+    # Graceful degradation persistence call to ClickHouse Cloud via official mcp-clickhouse
+    try:
+        memory_service = ProductionMemoryService()
+        await memory_service.save_analysis_run(response.model_dump(), started_at)
+    except Exception as db_err:
+        logger.error(f"[API ENDPOINT] Failed to persist analysis run to ClickHouse (degraded): {db_err!s}")
+        # Graceful degradation: do NOT crash or fail the response. Proceed returning validated results.
+
     logger.info(f"Pipeline completed successfully for scene '{payload.scene_input.scene_number}'")
     return response
