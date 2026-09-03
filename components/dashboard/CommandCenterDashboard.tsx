@@ -16,6 +16,7 @@ import { DecisionQueue } from "./DecisionQueue";
 import { RiskPanel } from "./RiskPanel";
 import { LiveAnalysisSummary } from "./LiveAnalysisSummary";
 import { ProductionHeader } from "../layout/ProductionHeader";
+import { ScreenplayIntelligence } from "../screenplay/ScreenplayIntelligence";
 
 import {
   ProductionAnalysisResponse,
@@ -62,6 +63,7 @@ interface MemoryHistoryState {
 }
 
 export function CommandCenterDashboard() {
+  const [activeTab, setActiveTab] = useState<"PRODUCTION" | "SCREENPLAY">("PRODUCTION");
   const [state, setState] = useState<AnalysisState>("IDLE");
   const [mode, setMode] = useState<DashboardMode>("DEMO");
   const [rawResponse, setRawResponse] = useState<ProductionAnalysisResponse | null>(null);
@@ -247,7 +249,37 @@ export function CommandCenterDashboard() {
       {/* Dynamic Header */}
       <ProductionHeader metadata={activeProduction.metadata} />
 
-      <div className="px-8 py-4 border-b border-slate-800 bg-slate-950 flex flex-wrap justify-between items-center gap-4 sticky top-[89px] z-10">
+      {/* Tab Switcher */}
+      <div className="px-8 py-2.5 border-b border-slate-800 bg-slate-950 flex gap-5">
+        <button
+          onClick={() => setActiveTab("PRODUCTION")}
+          className={`text-sm font-bold pb-2 border-b-2 transition-all ${
+            activeTab === "PRODUCTION"
+              ? "border-indigo-500 text-white"
+              : "border-transparent text-slate-500 hover:text-slate-300"
+          }`}
+        >
+          Production Command Center
+        </button>
+        <button
+          onClick={() => setActiveTab("SCREENPLAY")}
+          className={`text-sm font-bold pb-2 border-b-2 transition-all ${
+            activeTab === "SCREENPLAY"
+              ? "border-indigo-500 text-white"
+              : "border-transparent text-slate-500 hover:text-slate-300"
+          }`}
+        >
+          Screenplay Intelligence
+        </button>
+      </div>
+
+      {activeTab === "SCREENPLAY" ? (
+        <div className="p-6 md:p-8 max-w-[1600px] mx-auto">
+          <ScreenplayIntelligence />
+        </div>
+      ) : (
+        <>
+          <div className="px-8 py-4 border-b border-slate-800 bg-slate-950 flex flex-wrap justify-between items-center gap-4 sticky top-[89px] z-10">
         {/* Toggle Mode and status indicators */}
         <div className="flex items-center gap-4">
           <div className="flex bg-slate-900 border border-slate-800 p-0.5 rounded-lg">
@@ -465,6 +497,7 @@ export function CommandCenterDashboard() {
         )}
 
       </div>
+    </>)}
     </>
   );
 }

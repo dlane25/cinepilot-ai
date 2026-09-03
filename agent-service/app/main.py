@@ -1,7 +1,7 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.api import agents, health, memory
+from app.api import agents, health, memory, screenplays
 from app.config.settings import settings
 from app.core.logging import logger
 from app.memory.service import ProductionMemoryService
@@ -25,6 +25,7 @@ app.add_middleware(
 app.include_router(health.router, tags=["Health"])
 app.include_router(agents.router, prefix="/api/v1", tags=["Agents"])
 app.include_router(memory.router, prefix="/api/v1", tags=["Memory"])
+app.include_router(screenplays.router, prefix="/api/v1", tags=["Screenplays"])
 
 @app.on_event("startup")
 def on_startup():
