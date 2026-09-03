@@ -1,9 +1,8 @@
-﻿import os
-import sys
-import asyncio
+﻿import asyncio
 import json
+import os
+import sys
 import urllib.request
-from datetime import datetime
 
 # Add agent-service root to python path to avoid import errors when running directly
 sys.path.insert(0, os.path.abspath(os.path.dirname(os.path.dirname(__file__))))
@@ -74,18 +73,18 @@ async def main():
 
     # Construct raw multipart/form-data body manually to avoid third-party requests dependency
     body_parts = []
-    body_parts.append(f"--{boundary}".encode("utf-8"))
-    body_parts.append('Content-Disposition: form-data; name="production_id"'.encode("utf-8"))
-    body_parts.append(''.encode("utf-8"))
-    body_parts.append('prod-echopoint-001'.encode("utf-8"))
+    body_parts.append(f"--{boundary}".encode())
+    body_parts.append(b'Content-Disposition: form-data; name="production_id"')
+    body_parts.append(b'')
+    body_parts.append(b'prod-echopoint-001')
 
-    body_parts.append(f"--{boundary}".encode("utf-8"))
-    body_parts.append('Content-Disposition: form-data; name="file"; filename="test_screenplay_climax.pdf"'.encode("utf-8"))
-    body_parts.append('Content-Type: application/pdf'.encode("utf-8"))
-    body_parts.append(''.encode("utf-8"))
+    body_parts.append(f"--{boundary}".encode())
+    body_parts.append(b'Content-Disposition: form-data; name="file"; filename="test_screenplay_climax.pdf"')
+    body_parts.append(b'Content-Type: application/pdf')
+    body_parts.append(b'')
     body_parts.append(MINIMAL_SCREENPLAY_PDF_BYTES)
-    body_parts.append(f"--{boundary}--".encode("utf-8"))
-    body_parts.append(''.encode("utf-8"))
+    body_parts.append(f"--{boundary}--".encode())
+    body_parts.append(b'')
 
     body = b"\r\n".join(body_parts)
 

@@ -17,6 +17,7 @@ import { RiskPanel } from "./RiskPanel";
 import { LiveAnalysisSummary } from "./LiveAnalysisSummary";
 import { ProductionHeader } from "../layout/ProductionHeader";
 import { ScreenplayIntelligence } from "../screenplay/ScreenplayIntelligence";
+import { MultiAgentOptimization } from "./MultiAgentOptimization";
 
 import {
   ProductionAnalysisResponse,
@@ -63,7 +64,7 @@ interface MemoryHistoryState {
 }
 
 export function CommandCenterDashboard() {
-  const [activeTab, setActiveTab] = useState<"PRODUCTION" | "SCREENPLAY">("PRODUCTION");
+  const [activeTab, setActiveTab] = useState<"PRODUCTION" | "SCREENPLAY" | "OPTIMIZATION">("PRODUCTION");
   const [state, setState] = useState<AnalysisState>("IDLE");
   const [mode, setMode] = useState<DashboardMode>("DEMO");
   const [rawResponse, setRawResponse] = useState<ProductionAnalysisResponse | null>(null);
@@ -271,11 +272,25 @@ export function CommandCenterDashboard() {
         >
           Screenplay Intelligence
         </button>
+        <button
+          onClick={() => setActiveTab("OPTIMIZATION")}
+          className={`text-sm font-bold pb-2 border-b-2 transition-all ${
+            activeTab === "OPTIMIZATION"
+              ? "border-indigo-500 text-white"
+              : "border-transparent text-slate-500 hover:text-slate-300"
+          }`}
+        >
+          Multi-Agent Optimization
+        </button>
       </div>
 
       {activeTab === "SCREENPLAY" ? (
         <div className="p-6 md:p-8 max-w-[1600px] mx-auto">
           <ScreenplayIntelligence />
+        </div>
+      ) : activeTab === "OPTIMIZATION" ? (
+        <div className="p-6 md:p-8 max-w-[1600px] mx-auto">
+          <MultiAgentOptimization />
         </div>
       ) : (
         <>
