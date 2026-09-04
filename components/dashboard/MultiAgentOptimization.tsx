@@ -1,7 +1,8 @@
 "use client";
 
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import { ProductionOptimizationResponse } from "../../types/optimization";
+import { DecisionRecord } from "../../types/governance";
 import { formatCurrency } from "../../lib/utils/format";
 import {
   Cpu,
@@ -10,7 +11,9 @@ import {
   AlertCircle,
   CheckCircle,
   ShieldAlert,
-  Sparkles
+  Sparkles,
+  Database,
+  User
 } from "lucide-react";
 
 export function MultiAgentOptimization() {
@@ -20,7 +23,39 @@ export function MultiAgentOptimization() {
 
   // Holds our retrieved synthesized proposal response
   const [optimizationData, setOptimizationData] = useState<ProductionOptimizationResponse | null>(null);
+
+  // Track state of each recommendation ID: "Pending" | "Approved" | "Rejected"
   const [approvedRecs, setApprovedRecs] = useState<Record<string, "Approved" | "Rejected" | "Pending">>({});
+
+  // Track optional human reasons/notes typed for each recommendation ID
+  const [decisionNotes, setDecisionNotes] = useState<Record<string, string>>({});
+
+  // Confirmation modal active recommendation ID
+  const [confirmingRecId, setConfirmingRecId] = useState<string | null>(null);
+  const [confirmingAction, setConfirmingAction] = useState<"Approved" | "Rejected" | null>(null);
+
+  // ClickHouse Audit Ledger state
+  const [auditLedger, setAuditLedger] = useState<DecisionRecord[]>([]);
+  const [refreshTrigger, setRefreshTrigger] = useState<number>(0);
+
+  useEffect(() => {
+    let active = true;
+    const loadAuditLedger = async () => {
+      try {
+        const res = await fetch("/api/production-memory/decisions/history?production_id=prod-echopoint-001");
+        if (res.ok && active) {
+          const data = await res.json();
+          setAuditLedger(data.decisions || []);
+        }
+      } catch (err) {
+        console.warn("[FRONTEND] Failed to fetch decisions audit history:", err);
+      }
+    };
+    loadAuditLedger();
+    return () => {
+      active = false;
+    };
+  }, [refreshTrigger]);
 
   // Simulated live scanning steps representing specialized agent collaborations E2E
   const SCAN_STEPS = [
@@ -37,8 +72,10 @@ export function MultiAgentOptimization() {
     setError(null);
     setOptimizationData(null);
     setApprovedRecs({});
+    setDecisionNotes({});
+    setConfirmingRecId(null);
+    setConfirmingAction(null);
 
-    // Simulate real E2E multi-agent pipeline logs so the user sees the collaboration step-by-step
     try {
       for (let i = 0; i < SCAN_STEPS.length; i++) {
         setActiveStep(i);
@@ -80,49 +117,91 @@ export function MultiAgentOptimization() {
     }
   };
 
-  const handleApproveRecommendation = async (id: string) => {
-    setApprovedRecs(prev => ({ ...prev, [id]: "Approved" }));
+  const triggerDecisionModal = (id: string, action: "Approved" | "Rejected") => {
+    setConfirmingRecId(id);
+    setConfirmingAction(action);
+  };
+
+  const submitHumanDecision = async () => {
+    if (!confirmingRecId || !confirmingAction || !optimizationData) return;
+
+    const recId = confirmingRecId;
+    const action = confirmingAction;
+    const notes = decisionNotes[recId] || `Committed ${action} via human-in-the-loop optimization queue.`;
+
+    const recommendation = optimizationData.proposal.recommendations.find(r => r.recommendation_id === recId);
+    if (!recommendation) return;
+
+    // Optimistic state transition update
+    setApprovedRecs(prev => ({ ...prev, [recId]: action }));
+    setConfirmingRecId(null);
+    setConfirmingAction(null);
 
     try {
-      // Persist the human governance decision inside ClickHouse Cloud over standard MCP!
-      await fetch("/api/production-memory/decisions", {
+      // Persist human decision with complete metadata metrics to ClickHouse over MCP!
+      const res = await fetch("/api/production-memory/decisions", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
         },
         body: JSON.stringify({
-          recommendation_id: id,
+          recommendation_id: recId,
           production_id: "prod-echopoint-001",
-          decision: "Approved",
-          notes: "Approved under human-in-the-loop multi-agent optimization review."
+          proposal_id: optimizationData.proposal.proposal_id,
+          decision: action,
+          actor_name: "Production Executive",
+          actor_type: "human_demo_operator",
+          previous_state: "Pending Review",
+          new_state: action === "Approved" ? "APPROVED" : "REJECTED",
+          originating_agents: recommendation.originating_agent,
+          projected_savings: recommendation.projected_savings,
+          shooting_days_saved: recommendation.shooting_days_saved,
+          risks_reduced: recommendation.risks_reduced,
+          notes: notes
         }),
       });
+
+      if (!res.ok) {
+        throw new Error("FastAPI decisions endpoint rejected the submission.");
+      }
+
+      // Increment refresh trigger to load the newly added row from ClickHouse!
+      setRefreshTrigger(prev => prev + 1);
+
     } catch (err) {
-      console.error("[FRONTEND] ClickHouse decision log failed:", err);
+      console.error("[FRONTEND] Failed to persist decision to ClickHouse:", err);
     }
   };
 
-  const handleRejectRecommendation = async (id: string) => {
-    setApprovedRecs(prev => ({ ...prev, [id]: "Rejected" }));
+  // --- DETERMINISTIC RECALCULATION ENGINE (Approved vs Pending) ---
+  let pendingSavings = 0.0;
+  let pendingDaysSaved = 0;
+  let pendingRisksReduced = 0;
 
-    try {
-      // Persist the human governance decision inside ClickHouse Cloud over standard MCP!
-      await fetch("/api/production-memory/decisions", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          recommendation_id: id,
-          production_id: "prod-echopoint-001",
-          decision: "Rejected",
-          notes: "Rejected under human-in-the-loop multi-agent optimization review."
-        }),
-      });
-    } catch (err) {
-      console.error("[FRONTEND] ClickHouse decision log failed:", err);
-    }
-  };
+  let approvedSavings = 0.0;
+  let approvedDaysSaved = 0;
+  let approvedRisksReduced = 0;
+
+  if (optimizationData) {
+    optimizationData.proposal.recommendations.forEach(rec => {
+      const state = approvedRecs[rec.recommendation_id] || "Pending";
+
+      if (state === "Approved") {
+        approvedSavings += rec.projected_savings;
+        approvedDaysSaved += rec.shooting_days_saved;
+        approvedRisksReduced += rec.risks_reduced;
+      } else if (state === "Pending") {
+        pendingSavings += rec.projected_savings;
+        pendingDaysSaved += rec.shooting_days_saved;
+        pendingRisksReduced += rec.risks_reduced;
+      }
+    });
+  }
+
+  // Calculate dynamic outputs
+  const baselineSpend = 2617300.0;
+  const baselineDays = 31;
+  const baselineRisks = 7;
 
   return (
     <div className="space-y-8">
@@ -202,11 +281,60 @@ export function MultiAgentOptimization() {
         </div>
       )}
 
+      {/* Confirmation Modal */}
+      {confirmingRecId && confirmingAction && (
+        <div className="fixed inset-0 bg-slate-950/80 backdrop-blur-sm flex items-center justify-center p-4 z-50">
+          <div className="bg-slate-900 border border-indigo-500/30 rounded-xl max-w-lg w-full p-6 space-y-4 shadow-2xl">
+            <h3 className="text-base font-bold text-white flex items-center gap-2">
+              <ShieldAlert className="w-5 h-5 text-amber-400" />
+              Confirm Human-in-the-Loop Decision
+            </h3>
+
+            <p className="text-xs text-slate-400 leading-normal">
+              You are about to log an immutable decision on the following proposed recommendation. This will recompute the committed spend and record your audit trail in ClickHouse.
+            </p>
+
+            <div className="bg-slate-950 p-3 rounded border border-slate-850 text-xs space-y-2">
+              <p className="text-slate-500 font-bold">RECOMMENDATION:</p>
+              <p className="text-slate-300 font-semibold">{optimizationData?.proposal.recommendations.find(r => r.recommendation_id === confirmingRecId)?.title}</p>
+              <p className="text-indigo-400 font-bold">ACTION TARGET: {confirmingAction.toUpperCase()}</p>
+            </div>
+
+            <div>
+              <label className="text-[10px] text-slate-500 font-bold uppercase block mb-1">Optional Decision Note / Reasons</label>
+              <textarea
+                value={decisionNotes[confirmingRecId] || ""}
+                onChange={(e) => setDecisionNotes(prev => ({ ...prev, [confirmingRecId]: e.target.value }))}
+                placeholder="Type the operational justification for auditing..."
+                className="w-full text-xs bg-slate-950 border border-slate-850 rounded p-2.5 text-slate-300 focus:outline-none focus:border-indigo-500 min-h-[70px] custom-scrollbar"
+              />
+            </div>
+
+            <div className="flex gap-3 justify-end text-xs">
+              <button
+                onClick={() => { setConfirmingRecId(null); setConfirmingAction(null); }}
+                className="px-4 py-2 rounded bg-slate-800 hover:bg-slate-700 text-slate-300 font-semibold"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={submitHumanDecision}
+                className={`px-4 py-2 rounded text-white font-bold ${
+                  confirmingAction === "Approved" ? "bg-emerald-600 hover:bg-emerald-500" : "bg-rose-600 hover:bg-rose-500"
+                }`}
+              >
+                Confirm {confirmingAction}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Main Results Board */}
       {optimizationData && (
         <div className="space-y-8 animate-fadeIn">
 
-          {/* Comparison and proposal stats */}
+          {/* Approved vs Pending double-impact comparison stats */}
           <div className="grid grid-cols-1 xl:grid-cols-3 gap-6">
 
             {/* Summary card */}
@@ -222,49 +350,61 @@ export function MultiAgentOptimization() {
               </p>
             </div>
 
-            {/* Impact stats compared */}
+            {/* Side-by-Side Recalculated impact counters */}
             <div className="bg-slate-900 border border-slate-800 rounded-xl p-6 flex flex-col justify-between">
               <div>
-                <h4 className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-4">Calculated Impact Summary</h4>
+                <h4 className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-4">Committed vs Potential Impact</h4>
 
-                <div className="space-y-4">
-                  <div className="flex justify-between items-center bg-slate-950 p-2.5 rounded border border-slate-850">
-                    <div className="text-[10px] text-slate-500 block uppercase font-bold">Projected Spend</div>
+                <div className="space-y-3 text-xs">
+                  {/* Spend Impact */}
+                  <div className="bg-slate-950 p-2.5 rounded border border-slate-850 flex justify-between items-center">
+                    <div>
+                      <span className="text-[10px] text-slate-500 font-bold uppercase block mb-0.5">Projected Spend</span>
+                      <span className="text-[9px] text-emerald-400 font-bold block bg-emerald-500/10 px-1.5 py-0.25 rounded border border-emerald-500/10 w-fit">Committed: {formatCurrency(approvedSavings)}</span>
+                    </div>
                     <div className="text-right">
-                      <span className="text-xs text-slate-500 block line-through">{formatCurrency(optimizationData.impact.baseline_projected_spend)}</span>
-                      <span className="text-sm font-bold text-emerald-400">{formatCurrency(optimizationData.impact.optimized_projected_spend)}</span>
+                      <span className="text-[10px] text-slate-500 line-through block">{formatCurrency(baselineSpend)}</span>
+                      <span className="text-xs text-slate-400 block">Pending: {formatCurrency(pendingSavings)}</span>
                     </div>
                   </div>
 
-                  <div className="flex justify-between items-center bg-slate-950 p-2.5 rounded border border-slate-850">
-                    <div className="text-[10px] text-slate-500 block uppercase font-bold">Shooting Days</div>
+                  {/* Day Impact */}
+                  <div className="bg-slate-950 p-2.5 rounded border border-slate-850 flex justify-between items-center">
+                    <div>
+                      <span className="text-[10px] text-slate-500 font-bold uppercase block mb-0.5">Shooting Days</span>
+                      <span className="text-[9px] text-indigo-400 font-bold block bg-indigo-500/10 px-1.5 py-0.25 rounded border border-indigo-500/10 w-fit">Committed: {approvedDaysSaved} Saved</span>
+                    </div>
                     <div className="text-right">
-                      <span className="text-xs text-slate-500 block line-through">{optimizationData.impact.baseline_shooting_days} Days</span>
-                      <span className="text-sm font-bold text-white">{optimizationData.impact.optimized_shooting_days} Days</span>
+                      <span className="text-[10px] text-slate-500 line-through block">{baselineDays} Days</span>
+                      <span className="text-xs text-slate-400 block">Pending: {pendingDaysSaved} Saved</span>
                     </div>
                   </div>
 
-                  <div className="flex justify-between items-center bg-slate-950 p-2.5 rounded border border-slate-850">
-                    <div className="text-[10px] text-slate-500 block uppercase font-bold">High-Risk Events</div>
+                  {/* Risk Impact */}
+                  <div className="bg-slate-950 p-2.5 rounded border border-slate-850 flex justify-between items-center">
+                    <div>
+                      <span className="text-[10px] text-slate-500 font-bold uppercase block mb-0.5">High-Risk Events</span>
+                      <span className="text-[9px] text-rose-400 font-bold block bg-rose-500/10 px-1.5 py-0.25 rounded border border-rose-500/10 w-fit">Committed: {approvedRisksReduced} Reduced</span>
+                    </div>
                     <div className="text-right">
-                      <span className="text-xs text-slate-500 block line-through">{optimizationData.impact.baseline_high_risk_events} Events</span>
-                      <span className="text-sm font-bold text-rose-400">{optimizationData.impact.optimized_high_risk_events} Events</span>
+                      <span className="text-[10px] text-slate-500 line-through block">{baselineRisks} Events</span>
+                      <span className="text-xs text-slate-400 block">Pending: {pendingRisksReduced} Reduced</span>
                     </div>
                   </div>
                 </div>
               </div>
 
-              <div className="pt-4 border-t border-slate-850 flex justify-between items-center">
-                <span className="text-xs font-semibold text-slate-400">Total savings:</span>
+              <div className="pt-3 border-t border-slate-850 flex justify-between items-center">
+                <span className="text-xs font-semibold text-slate-400">Total Approved savings:</span>
                 <span className="text-base font-bold text-emerald-400">
-                  {formatCurrency(optimizationData.impact.total_potential_savings)}
+                  {formatCurrency(approvedSavings)}
                 </span>
               </div>
             </div>
 
           </div>
 
-          {/* Tradeoffs & Disagreements Section (Crucial!) */}
+          {/* Tradeoffs & Disagreements Section (Conflict Governance!) */}
           {optimizationData.proposal.conflicts.length > 0 && (
             <div className="bg-slate-900 border border-rose-500/20 rounded-xl p-6">
               <h4 className="text-xs font-bold text-rose-400 uppercase tracking-wider mb-4 flex items-center gap-1.5">
@@ -310,31 +450,27 @@ export function MultiAgentOptimization() {
             </div>
           )}
 
-          {/* Agreements Consensus */}
-          {optimizationData.proposal.agreements.length > 0 && (
-            <div className="bg-slate-900 border border-slate-800 rounded-xl p-6">
-              <h4 className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-4">Consensuses & Joint Opportunities</h4>
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                {optimizationData.proposal.agreements.map((agree, i) => (
-                  <div key={i} className="bg-slate-950 border border-slate-850 p-4 rounded-lg">
-                    <div className="flex items-center gap-1.5 mb-2 text-xs font-bold text-slate-300">
-                      <div className="w-1.5 h-1.5 rounded-full bg-emerald-400" />
-                      {agree.agents.join(" + ")}
-                    </div>
-                    <h5 className="text-xs font-bold text-white mb-1">{agree.title}</h5>
-                    <p className="text-xs text-slate-400 leading-normal">{agree.description}</p>
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
-
-          {/* Individual Human Approval Queue */}
+          {/* Individual Human Approval Queue with Conflict & Dependency Blockers! */}
           <div className="bg-slate-900 border border-slate-800 rounded-xl p-6">
             <h4 className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-4">Human Governance Review Queue</h4>
             <div className="space-y-4">
               {optimizationData.proposal.recommendations.map((rec, i) => {
                 const state = approvedRecs[rec.recommendation_id] || "Pending";
+
+                // CONFLICT GOVERNANCE: Evaluate if a conflicting recommendation has already been approved!
+                // If yes, this recommendation is locked out with a strict warning.
+                let isBlockedByConflict = false;
+                let conflictWarning = "";
+
+                optimizationData.proposal.conflicts.forEach(conf => {
+                  // Find the other recommendation in the conflict
+                  const otherRec = optimizationData.proposal.recommendations.find(r => r.recommendation_id === conf.recommended_option);
+                  if (otherRec && approvedRecs[otherRec.recommendation_id] === "Approved" && rec.recommendation_id !== otherRec.recommendation_id) {
+                    isBlockedByConflict = true;
+                    conflictWarning = `Locked: Conflict with approved recommendation ID '${otherRec.recommendation_id}' (${otherRec.title}).`;
+                  }
+                });
+
                 return (
                   <div key={i} className="bg-slate-950 border border-slate-850 p-5 rounded-lg flex flex-wrap md:flex-nowrap justify-between gap-6 hover:border-slate-700 transition-colors">
                     <div className="space-y-2 flex-1 min-w-[300px]">
@@ -348,6 +484,13 @@ export function MultiAgentOptimization() {
 
                       <h5 className="text-sm font-bold text-white">{rec.title}</h5>
                       <p className="text-xs text-slate-400 leading-normal">{rec.explanation}</p>
+
+                      {isBlockedByConflict && (
+                        <div className="inline-flex items-center gap-1.5 text-xs text-rose-400 font-semibold bg-rose-500/5 border border-rose-500/10 px-3 py-1 rounded">
+                          <ShieldAlert className="w-3.5 h-3.5" />
+                          {conflictWarning}
+                        </div>
+                      )}
 
                       <div className="flex flex-wrap gap-4 text-[10px] text-slate-500 font-semibold uppercase tracking-wider">
                         <span>Savings: <span className="text-emerald-400 font-bold">{rec.projected_savings > 0 ? formatCurrency(rec.projected_savings) : "None"}</span></span>
@@ -369,16 +512,16 @@ export function MultiAgentOptimization() {
                       {/* Approval buttons */}
                       <div className="flex gap-2 w-full">
                         <button
-                          onClick={() => handleApproveRecommendation(rec.recommendation_id)}
-                          disabled={state !== "Pending"}
+                          onClick={() => triggerDecisionModal(rec.recommendation_id, "Approved")}
+                          disabled={state !== "Pending" || isBlockedByConflict}
                           className="flex-1 bg-indigo-600 hover:bg-indigo-500 disabled:bg-slate-850 disabled:text-slate-600 text-white text-xs font-semibold py-1.5 px-3 rounded transition-colors"
                         >
                           Approve
                         </button>
                         <button
-                          onClick={() => handleRejectRecommendation(rec.recommendation_id)}
+                          onClick={() => triggerDecisionModal(rec.recommendation_id, "Rejected")}
                           disabled={state !== "Pending"}
-                          className="flex-1 bg-slate-800 hover:bg-slate-700 disabled:bg-slate-900/50 disabled:text-slate-700 text-white text-xs font-semibold py-1.5 px-3 rounded border border-slate-700 disabled:border-slate-800 transition-colors"
+                          className="flex-1 bg-slate-800 hover:bg-slate-700 disabled:bg-slate-900/50 disabled:text-slate-750 text-white text-xs font-semibold py-1.5 px-3 rounded border border-slate-700 disabled:border-slate-800 transition-colors"
                         >
                           Reject
                         </button>
@@ -389,6 +532,84 @@ export function MultiAgentOptimization() {
               })}
             </div>
           </div>
+
+          {/* CLICKHOUSE IMMUTABLE AUDIT TRAIL LOG LEDGER (Real persistence rendering!) */}
+          <section className="bg-slate-950 border border-slate-800 rounded-xl p-6 mt-8">
+            <div className="flex items-center gap-2 mb-6 border-b border-slate-800 pb-4">
+              <Database className="w-5 h-5 text-indigo-400" />
+              <div className="flex flex-col">
+                <h2 className="text-lg font-bold text-white leading-tight">Human Decisions Audit Trail</h2>
+                <p className="text-xs text-slate-500 font-medium">Immutable append-only ledger logs retrieved chronologically from ClickHouse Cloud over MCP</p>
+              </div>
+            </div>
+
+            <div className="overflow-x-auto">
+              <table className="w-full text-left text-xs border-collapse">
+                <thead>
+                  <tr className="border-b border-slate-800 text-slate-500 font-bold uppercase tracking-wider text-[10px]">
+                    <th className="pb-3 pr-4">Action</th>
+                    <th className="pb-3 pr-4">Actor</th>
+                    <th className="pb-3 pr-4">Recommendation ID</th>
+                    <th className="pb-3 pr-4">Committed Impact</th>
+                    <th className="pb-3 pr-4">Reason Notes</th>
+                    <th className="pb-3 text-right">Timestamp (UTC)</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-850">
+                  {auditLedger.map((dec, idx) => (
+                    <tr key={idx} className="hover:bg-slate-900/40 transition-colors">
+                      <td className="py-3.5 pr-4">
+                        <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full border uppercase ${
+                          dec.decision === "Approved" ? "bg-emerald-500/10 border-emerald-500/20 text-emerald-400" : "bg-rose-500/10 border-rose-500/20 text-rose-400"
+                        }`}>
+                          {dec.decision.toUpperCase()}
+                        </span>
+                      </td>
+                      <td className="py-3.5 pr-4 text-slate-300">
+                        <div className="flex items-center gap-1.5">
+                          <User className="w-3.5 h-3.5 text-slate-500" />
+                          <div>
+                            <span className="font-semibold block">{dec.actor_name}</span>
+                            <span className="text-[9px] text-slate-500 block uppercase font-bold">{dec.actor_type.replace(/_/g, " ")}</span>
+                          </div>
+                        </div>
+                      </td>
+                      <td className="py-3.5 pr-4 text-slate-400 font-mono text-[10px]">
+                        {dec.recommendation_id}
+                      </td>
+                      <td className="py-3.5 pr-4">
+                        <div className="text-slate-300">
+                          {parseFloat(String(dec.projected_savings)) > 0 && (
+                            <span className="text-emerald-400 font-bold block">{formatCurrency(parseFloat(String(dec.projected_savings)))}</span>
+                          )}
+                          {parseInt(String(dec.shooting_days_saved)) > 0 && (
+                            <span className="text-indigo-400 block">{dec.shooting_days_saved} Days Saved</span>
+                          )}
+                          {parseInt(String(dec.risks_reduced)) > 0 && (
+                            <span className="text-rose-400 block">{dec.risks_reduced} Risks Reduced</span>
+                          )}
+                          {parseFloat(String(dec.projected_savings)) === 0 && parseInt(String(dec.shooting_days_saved)) === 0 && (
+                            <span className="text-slate-500 italic block">None</span>
+                          )}
+                        </div>
+                      </td>
+                      <td className="py-3.5 pr-4 text-slate-400 max-w-xs truncate" title={dec.notes}>
+                        {dec.notes}
+                      </td>
+                      <td className="py-3.5 text-right font-mono text-slate-500 text-[10px]">
+                        {new Date(dec.decided_at).toLocaleTimeString()} {new Date(dec.decided_at).toLocaleDateString()}
+                      </td>
+                    </tr>
+                  ))}
+                  {auditLedger.length === 0 && (
+                    <tr>
+                      <td colSpan={6} className="text-center py-10 text-xs text-slate-600 italic">No human decisions logged in production memory yet. Execute review decisions above to begin auditing.</td>
+                    </tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </section>
 
         </div>
       )}

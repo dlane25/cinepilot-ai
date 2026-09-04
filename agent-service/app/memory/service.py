@@ -17,7 +17,7 @@ class ProductionMemoryService:
     def bootstrap_db(self) -> bool:
         """
         Uses clickhouse-connect (isolated direct client) only during server bootstrapping
-        to run DDL migrations. This is un-exposed to runtime analysis operations.
+        to run DDL migrations and ALTER schemas additively.
         """
         if not settings.clickhouse_host:
             logger.warning("[MEMORY SERVICE] ClickHouse host not set. Skipping DDL bootstrap.")
@@ -93,20 +93,41 @@ class ProductionMemoryService:
             ORDER BY (production_id, scene_number, recommendation_id);
             """)
 
-            # DDL 4: production_decisions
+            # DDL 4: production_decisions (Audit Trail)
             client.command("""
             CREATE TABLE IF NOT EXISTS production_decisions (
                 decision_id String,
                 recommendation_id String,
                 production_id String,
+                proposal_id String,
                 decision String,
+                actor_name String,
+                actor_type String,
+                previous_state String,
+                new_state String,
+                originating_agents String,
+                projected_savings Decimal(18, 4),
+                shooting_days_saved UInt32,
+                risks_reduced UInt32,
                 decided_at DateTime64(3, 'UTC'),
                 notes String
             ) ENGINE = MergeTree()
             ORDER BY (production_id, decided_at, decision_id);
             """)
 
-            logger.info("[MEMORY SERVICE] ClickHouse Cloud schemas bootstrapped successfully.")
+            # Additive schema evolution columns
+            logger.info("[MEMORY SERVICE] Altering production_decisions with any missing audit fields...")
+            client.command("ALTER TABLE production_decisions ADD COLUMN IF NOT EXISTS proposal_id String;")
+            client.command("ALTER TABLE production_decisions ADD COLUMN IF NOT EXISTS actor_name String;")
+            client.command("ALTER TABLE production_decisions ADD COLUMN IF NOT EXISTS actor_type String;")
+            client.command("ALTER TABLE production_decisions ADD COLUMN IF NOT EXISTS previous_state String;")
+            client.command("ALTER TABLE production_decisions ADD COLUMN IF NOT EXISTS new_state String;")
+            client.command("ALTER TABLE production_decisions ADD COLUMN IF NOT EXISTS originating_agents String;")
+            client.command("ALTER TABLE production_decisions ADD COLUMN IF NOT EXISTS projected_savings Decimal(18, 4);")
+            client.command("ALTER TABLE production_decisions ADD COLUMN IF NOT EXISTS shooting_days_saved UInt32;")
+            client.command("ALTER TABLE production_decisions ADD COLUMN IF NOT EXISTS risks_reduced UInt32;")
+
+            logger.info("[MEMORY SERVICE] ClickHouse Cloud schemas bootstrapped and altered successfully.")
             client.close()
             return True
         except Exception as e:
@@ -211,9 +232,25 @@ class ProductionMemoryService:
         logger.info(f"[MEMORY SERVICE] Saved analysis run {analysis_run_id} to ClickHouse.")
         return analysis_run_id
 
-    async def save_human_decision(self, recommendation_id: str, production_id: str, decision: str, notes: str) -> str:
+    async def save_human_decision(
+        self,
+        recommendation_id: str,
+        production_id: str,
+        decision: str,
+        notes: str,
+        proposal_id: str = "",
+        actor_name: str = "Production Executive",
+        actor_type: str = "human_demo_operator",
+        previous_state: str = "Pending Review",
+        new_state: str = "APPROVED",
+        originating_agents: str = "",
+        projected_savings: float = 0.0,
+        shooting_days_saved: int = 0,
+        risks_reduced: int = 0
+    ) -> str:
         """
         Records human-in-the-loop decision and updates the recommendation state in ClickHouse.
+        Enforces immutable-style append-only audit trail logging.
         """
         decision_id = str(uuid.uuid4())
         decided_at = datetime.now(UTC)
@@ -221,12 +258,23 @@ class ProductionMemoryService:
         # Insert decision record
         decision_sql = f"""
         INSERT INTO production_decisions (
-            decision_id, recommendation_id, production_id, decision, decided_at, notes
+            decision_id, recommendation_id, production_id, proposal_id, decision,
+            actor_name, actor_type, previous_state, new_state, originating_agents,
+            projected_savings, shooting_days_saved, risks_reduced, decided_at, notes
         ) VALUES (
             '{decision_id}',
             '{self._escape(recommendation_id)}',
             '{self._escape(production_id)}',
+            '{self._escape(proposal_id)}',
             '{self._escape(decision)}',
+            '{self._escape(actor_name)}',
+            '{self._escape(actor_type)}',
+            '{self._escape(previous_state)}',
+            '{self._escape(new_state)}',
+            '{self._escape(originating_agents)}',
+            {float(projected_savings)},
+            {int(shooting_days_saved)},
+            {int(risks_reduced)},
             '{decided_at.strftime('%Y-%m-%d %H:%M:%S.%f')[:-3]}',
             '{self._escape(notes)}'
         )
@@ -235,8 +283,8 @@ class ProductionMemoryService:
 
         # Update recommendation state (standard ClickHouse Mutation)
         update_sql = f"""
-        ALTER TABLE production_recommendations 
-        UPDATE approval_state = '{self._escape(decision)}' 
+        ALTER TABLE production_recommendations
+        UPDATE approval_state = '{self._escape(decision)}'
         WHERE recommendation_id = '{self._escape(recommendation_id)}'
         """
         await self.mcp_client.run_query(update_sql)
@@ -247,9 +295,9 @@ class ProductionMemoryService:
     async def get_historical_analyses(self, production_id: str) -> list[dict]:
         """Queries historical runs for a given production."""
         sql = f"""
-        SELECT * FROM production_analysis_runs 
-        WHERE production_id = '{self._escape(production_id)}' 
-        ORDER BY started_at DESC 
+        SELECT * FROM production_analysis_runs
+        WHERE production_id = '{self._escape(production_id)}'
+        ORDER BY started_at DESC
         LIMIT 20
         """
         return await self.mcp_client.run_query(sql)
@@ -257,9 +305,9 @@ class ProductionMemoryService:
     async def get_historical_risks(self, production_id: str) -> list[dict]:
         """Queries historical risks for a given production."""
         sql = f"""
-        SELECT * FROM production_risks 
-        WHERE production_id = '{self._escape(production_id)}' 
-        ORDER BY created_at DESC 
+        SELECT * FROM production_risks
+        WHERE production_id = '{self._escape(production_id)}'
+        ORDER BY created_at DESC
         LIMIT 50
         """
         return await self.mcp_client.run_query(sql)
@@ -267,9 +315,19 @@ class ProductionMemoryService:
     async def get_historical_recommendations(self, production_id: str) -> list[dict]:
         """Queries historical recommendations for a given production."""
         sql = f"""
-        SELECT * FROM production_recommendations 
-        WHERE production_id = '{self._escape(production_id)}' 
-        ORDER BY created_at DESC 
+        SELECT * FROM production_recommendations
+        WHERE production_id = '{self._escape(production_id)}'
+        ORDER BY created_at DESC
+        LIMIT 50
+        """
+        return await self.mcp_client.run_query(sql)
+
+    async def get_historical_decisions(self, production_id: str) -> list[dict]:
+        """Queries historical human-in-the-loop decisions for auditing."""
+        sql = f"""
+        SELECT * FROM production_decisions
+        WHERE production_id = '{self._escape(production_id)}'
+        ORDER BY decided_at DESC
         LIMIT 50
         """
         return await self.mcp_client.run_query(sql)
