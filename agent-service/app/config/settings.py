@@ -27,4 +27,11 @@ class Settings(BaseSettings):
     port: int = Field(default=8000, validation_alias="PORT")
     log_level: str = Field(default="info", validation_alias="LOG_LEVEL")
 
+    # CORS Configuration
+    cors_origins: str = Field(default="http://localhost:3000", validation_alias="CORS_ORIGINS")
+
+    @property
+    def cors_origins_list(self) -> list[str]:
+        return [origin.strip() for origin in self.cors_origins.split(",")]
+
 settings = Settings()
