@@ -51,6 +51,15 @@ class ClickHouseDecision(BaseModel):
     decision_id: str
     recommendation_id: str
     production_id: str
+    proposal_id: str = ""
     decision: str  # "Approved" | "Rejected"
+    actor_name: str = "Production Executive"
+    actor_type: str = "human_demo_operator"
+    previous_state: str = "Pending Review"
+    new_state: str  # "APPROVED" | "REJECTED"
+    originating_agents: str
+    projected_savings: float = 0.0
+    shooting_days_saved: int = 0
+    risks_reduced: int = 0
     decided_at: datetime
     notes: str
