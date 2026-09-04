@@ -15,7 +15,7 @@ app = FastAPI(
 # Standard CORS setups for film studio security
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # Adjust as needed for specific environments
+    allow_origins=settings.cors_origins_list,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
