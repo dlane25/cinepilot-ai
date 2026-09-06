@@ -176,7 +176,11 @@ export function CommandCenterDashboard() {
           recommendation_id: id,
           production_id: "prod-echopoint-001",
           decision: "Approved",
-          notes: "Approved via ClickHouse human-in-the-loop audit trail."
+          notes: "Approved via ClickHouse human-in-the-loop audit trail.",
+          new_state: "APPROVED",
+          previous_state: "Pending Review",
+          actor_name: "Production Executive",
+          actor_type: "human_demo_operator"
         }),
       });
       // Refresh the historical trigger
@@ -211,7 +215,11 @@ export function CommandCenterDashboard() {
           recommendation_id: id,
           production_id: "prod-echopoint-001",
           decision: "Rejected",
-          notes: "Rejected via ClickHouse human-in-the-loop audit trail."
+          notes: "Rejected via ClickHouse human-in-the-loop audit trail.",
+          new_state: "REJECTED",
+          previous_state: "Pending Review",
+          actor_name: "Production Executive",
+          actor_type: "human_demo_operator"
         }),
       });
       // Refresh the historical trigger
