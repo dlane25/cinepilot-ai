@@ -3,7 +3,7 @@ import { AgentServiceError, TimeoutError, NetworkError } from "./errors";
 
 // Determine agent service target URL from environmental configuration safely
 const AGENT_SERVICE_URL = process.env.CINEPILOT_AGENT_SERVICE_URL || "http://127.0.0.1:8000";
-const REQUEST_TIMEOUT_MS = 60000; // 60-second limit for complex Vertex AI reasoning
+const REQUEST_TIMEOUT_MS = 180000; // 180-second limit for complex Vertex AI reasoning
 
 export async function analyzeProduction(
   payload: ProductionAnalysisRequest
