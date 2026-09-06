@@ -9,8 +9,9 @@ ENV PYTHONUNBUFFERED=1
 # Install build dependencies
 RUN pip install --no-cache-dir hatchling
 
-# Copy project definition
+# Copy project definition and readme
 COPY pyproject.toml .
+COPY README.md .
 
 # Install dependencies directly using pip
 RUN pip install --no-cache-dir .
