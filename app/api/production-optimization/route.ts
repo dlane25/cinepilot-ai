@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 
 const AGENT_SERVICE_URL = process.env.CINEPILOT_AGENT_SERVICE_URL || "http://127.0.0.1:8000";
-const REQUEST_TIMEOUT_MS = 60000; // Strict 60s timeout for complex multi-agent reasoning
+const REQUEST_TIMEOUT_MS = 180000; // Strict 180s timeout for complex multi-agent reasoning
 
 export async function POST(req: NextRequest) {
   const requestId = Math.random().toString(36).substring(2, 9);
@@ -55,3 +55,5 @@ export async function POST(req: NextRequest) {
   }
 }
 export const dynamic = "force-dynamic";
+
+export const maxDuration = 300;
