@@ -5,17 +5,27 @@ interface SidebarItemProps {
   icon: React.ElementType;
   label: string;
   isActive?: boolean;
+  href?: string;
 }
 
-function SidebarItem({ icon: Icon, label, isActive }: SidebarItemProps) {
+function SidebarItem({ icon: Icon, label, isActive, href }: SidebarItemProps) {
+  const baseClass = `w-full flex items-center gap-3 px-4 py-2.5 rounded-md transition-colors text-sm font-medium ${
+    isActive
+      ? "bg-slate-800 text-slate-100"
+      : "text-slate-400 hover:bg-slate-800/50 hover:text-slate-200"
+  }`;
+
+  if (href) {
+    return (
+      <a href={href} className={baseClass}>
+        <Icon className="w-4 h-4" />
+        {label}
+      </a>
+    );
+  }
+
   return (
-    <button
-      className={`w-full flex items-center gap-3 px-4 py-2.5 rounded-md transition-colors text-sm font-medium ${
-        isActive 
-          ? "bg-slate-800 text-slate-100" 
-          : "text-slate-400 hover:bg-slate-800/50 hover:text-slate-200"
-      }`}
-    >
+    <button className={baseClass}>
       <Icon className="w-4 h-4" />
       {label}
     </button>
@@ -33,7 +43,7 @@ export function ApplicationShell({ children }: { children: React.ReactNode }) {
             <span className="font-bold text-lg tracking-wide text-slate-100">CinePilot<span className="text-indigo-500">AI</span></span>
           </div>
         </div>
-        
+
         <nav className="flex-1 overflow-y-auto py-4 px-3 space-y-1">
           <div className="px-3 mb-2 text-xs font-semibold text-slate-500 uppercase tracking-wider">
             Workspace
@@ -42,13 +52,13 @@ export function ApplicationShell({ children }: { children: React.ReactNode }) {
           <SidebarItem icon={Calendar} label="Schedule" />
           <SidebarItem icon={DollarSign} label="Budget" />
           <SidebarItem icon={AlertTriangle} label="Risks" />
-          
+
           <div className="px-3 mt-6 mb-2 text-xs font-semibold text-slate-500 uppercase tracking-wider">
             Intelligence
           </div>
           <SidebarItem icon={Bot} label="Agents" />
           <SidebarItem icon={ListChecks} label="Continuity" />
-          <SidebarItem icon={History} label="Decisions" />
+          <SidebarItem icon={History} label="Decisions" href="#decisions" />
         </nav>
 
         <div className="p-4 border-t border-slate-800">

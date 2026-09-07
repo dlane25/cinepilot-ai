@@ -18,6 +18,7 @@ import { LiveAnalysisSummary } from "./LiveAnalysisSummary";
 import { ProductionHeader } from "../layout/ProductionHeader";
 import { ScreenplayIntelligence } from "../screenplay/ScreenplayIntelligence";
 import { MultiAgentOptimization } from "./MultiAgentOptimization";
+import { DecisionAuditTrail } from "./DecisionAuditTrail";
 
 import {
   ProductionAnalysisResponse,
@@ -64,7 +65,7 @@ interface MemoryHistoryState {
 }
 
 export function CommandCenterDashboard() {
-  const [activeTab, setActiveTab] = useState<"PRODUCTION" | "SCREENPLAY" | "OPTIMIZATION">("PRODUCTION");
+  const [activeTab, setActiveTab] = useState<"PRODUCTION" | "SCREENPLAY" | "OPTIMIZATION" | "DECISIONS">("PRODUCTION");
   const [state, setState] = useState<AnalysisState>("IDLE");
   const [mode, setMode] = useState<DashboardMode>("DEMO");
   const [rawResponse, setRawResponse] = useState<ProductionAnalysisResponse | null>(null);
@@ -77,6 +78,17 @@ export function CommandCenterDashboard() {
   // ClickHouse Production Memory state
   const [memoryHistory, setMemoryHistory] = useState<MemoryHistoryState | null>(null);
   const [refreshTrigger, setRefreshTrigger] = useState(0);
+
+  useEffect(() => {
+    const handleHashChange = () => {
+      if (window.location.hash === "#decisions") {
+        setActiveTab("DECISIONS");
+      }
+    };
+    handleHashChange();
+    window.addEventListener("hashchange", handleHashChange);
+    return () => window.removeEventListener("hashchange", handleHashChange);
+  }, []);
 
   useEffect(() => {
     let active = true;
@@ -290,6 +302,16 @@ export function CommandCenterDashboard() {
         >
           Multi-Agent Optimization
         </button>
+        <button
+          onClick={() => setActiveTab("DECISIONS")}
+          className={`text-sm font-bold pb-2 border-b-2 transition-all ${
+            activeTab === "DECISIONS"
+              ? "border-indigo-500 text-white"
+              : "border-transparent text-slate-500 hover:text-slate-300"
+          }`}
+        >
+          Human Decisions
+        </button>
       </div>
 
       {activeTab === "SCREENPLAY" ? (
@@ -299,6 +321,10 @@ export function CommandCenterDashboard() {
       ) : activeTab === "OPTIMIZATION" ? (
         <div className="p-6 md:p-8 max-w-[1600px] mx-auto">
           <MultiAgentOptimization />
+        </div>
+      ) : activeTab === "DECISIONS" ? (
+        <div className="p-6 md:p-8 max-w-[1600px] mx-auto">
+          <DecisionAuditTrail refreshTrigger={refreshTrigger} />
         </div>
       ) : (
         <>

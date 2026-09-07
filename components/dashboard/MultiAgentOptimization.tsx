@@ -1,8 +1,7 @@
 "use client";
 
-import React, { useState, useEffect } from "react";
+import React, { useState } from "react";
 import { ProductionOptimizationResponse } from "../../types/optimization";
-import { DecisionRecord } from "../../types/governance";
 import { formatCurrency } from "../../lib/utils/format";
 import {
   Cpu,
@@ -11,9 +10,7 @@ import {
   AlertCircle,
   CheckCircle,
   ShieldAlert,
-  Sparkles,
-  Database,
-  User
+  Sparkles
 } from "lucide-react";
 
 export function MultiAgentOptimization() {
@@ -33,29 +30,6 @@ export function MultiAgentOptimization() {
   // Confirmation modal active recommendation ID
   const [confirmingRecId, setConfirmingRecId] = useState<string | null>(null);
   const [confirmingAction, setConfirmingAction] = useState<"Approved" | "Rejected" | null>(null);
-
-  // ClickHouse Audit Ledger state
-  const [auditLedger, setAuditLedger] = useState<DecisionRecord[]>([]);
-  const [refreshTrigger, setRefreshTrigger] = useState<number>(0);
-
-  useEffect(() => {
-    let active = true;
-    const loadAuditLedger = async () => {
-      try {
-        const res = await fetch("/api/production-memory/decisions/history?production_id=prod-echopoint-001");
-        if (res.ok && active) {
-          const data = await res.json();
-          setAuditLedger(data.decisions || []);
-        }
-      } catch (err) {
-        console.warn("[FRONTEND] Failed to fetch decisions audit history:", err);
-      }
-    };
-    loadAuditLedger();
-    return () => {
-      active = false;
-    };
-  }, [refreshTrigger]);
 
   // Simulated live scanning steps representing specialized agent collaborations E2E
   const SCAN_STEPS = [
@@ -164,9 +138,6 @@ export function MultiAgentOptimization() {
       if (!res.ok) {
         throw new Error("FastAPI decisions endpoint rejected the submission.");
       }
-
-      // Increment refresh trigger to load the newly added row from ClickHouse!
-      setRefreshTrigger(prev => prev + 1);
 
     } catch (err) {
       console.error("[FRONTEND] Failed to persist decision to ClickHouse:", err);
@@ -532,85 +503,6 @@ export function MultiAgentOptimization() {
               })}
             </div>
           </div>
-
-          {/* CLICKHOUSE IMMUTABLE AUDIT TRAIL LOG LEDGER (Real persistence rendering!) */}
-          <section className="bg-slate-950 border border-slate-800 rounded-xl p-6 mt-8">
-            <div className="flex items-center gap-2 mb-6 border-b border-slate-800 pb-4">
-              <Database className="w-5 h-5 text-indigo-400" />
-              <div className="flex flex-col">
-                <h2 className="text-lg font-bold text-white leading-tight">Human Decisions Audit Trail</h2>
-                <p className="text-xs text-slate-500 font-medium">Immutable append-only ledger logs retrieved chronologically from ClickHouse Cloud over MCP</p>
-              </div>
-            </div>
-
-            <div className="overflow-x-auto">
-              <table className="w-full text-left text-xs border-collapse">
-                <thead>
-                  <tr className="border-b border-slate-800 text-slate-500 font-bold uppercase tracking-wider text-[10px]">
-                    <th className="pb-3 pr-4">Action</th>
-                    <th className="pb-3 pr-4">Actor</th>
-                    <th className="pb-3 pr-4">Recommendation ID</th>
-                    <th className="pb-3 pr-4">Committed Impact</th>
-                    <th className="pb-3 pr-4">Reason Notes</th>
-                    <th className="pb-3 text-right">Timestamp (UTC)</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-slate-850">
-                  {auditLedger.map((dec, idx) => (
-                    <tr key={idx} className="hover:bg-slate-900/40 transition-colors">
-                      <td className="py-3.5 pr-4">
-                        <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full border uppercase ${
-                          dec.decision === "Approved" ? "bg-emerald-500/10 border-emerald-500/20 text-emerald-400" : "bg-rose-500/10 border-rose-500/20 text-rose-400"
-                        }`}>
-                          {dec.decision.toUpperCase()}
-                        </span>
-                      </td>
-                      <td className="py-3.5 pr-4 text-slate-300">
-                        <div className="flex items-center gap-1.5">
-                          <User className="w-3.5 h-3.5 text-slate-500" />
-                          <div>
-                            <span className="font-semibold block">{dec.actor_name}</span>
-                            <span className="text-[9px] text-slate-500 block uppercase font-bold">{dec.actor_type.replace(/_/g, " ")}</span>
-                          </div>
-                        </div>
-                      </td>
-                      <td className="py-3.5 pr-4 text-slate-400 font-mono text-[10px]">
-                        {dec.recommendation_id}
-                      </td>
-                      <td className="py-3.5 pr-4">
-                        <div className="text-slate-300">
-                          {parseFloat(String(dec.projected_savings)) > 0 && (
-                            <span className="text-emerald-400 font-bold block">{formatCurrency(parseFloat(String(dec.projected_savings)))}</span>
-                          )}
-                          {parseInt(String(dec.shooting_days_saved)) > 0 && (
-                            <span className="text-indigo-400 block">{dec.shooting_days_saved} Days Saved</span>
-                          )}
-                          {parseInt(String(dec.risks_reduced)) > 0 && (
-                            <span className="text-rose-400 block">{dec.risks_reduced} Risks Reduced</span>
-                          )}
-                          {parseFloat(String(dec.projected_savings)) === 0 && parseInt(String(dec.shooting_days_saved)) === 0 && (
-                            <span className="text-slate-500 italic block">None</span>
-                          )}
-                        </div>
-                      </td>
-                      <td className="py-3.5 pr-4 text-slate-400 max-w-xs truncate" title={dec.notes}>
-                        {dec.notes}
-                      </td>
-                      <td className="py-3.5 text-right font-mono text-slate-500 text-[10px]">
-                        {new Date(dec.decided_at).toLocaleTimeString()} {new Date(dec.decided_at).toLocaleDateString()}
-                      </td>
-                    </tr>
-                  ))}
-                  {auditLedger.length === 0 && (
-                    <tr>
-                      <td colSpan={6} className="text-center py-10 text-xs text-slate-600 italic">No human decisions logged in production memory yet. Execute review decisions above to begin auditing.</td>
-                    </tr>
-                  )}
-                </tbody>
-              </table>
-            </div>
-          </section>
-
         </div>
       )}
 
