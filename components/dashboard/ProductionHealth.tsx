@@ -6,11 +6,12 @@ import { countHighRiskEvents, calculateBudgetVariance } from "../../lib/domain/c
 interface ProductionHealthProps {
   production: Production;
   risks: ProductionRisk[];
+  resolvedRiskCount?: number;
 }
 
-export function ProductionHealth({ production, risks }: ProductionHealthProps) {
+export function ProductionHealth({ production, risks, resolvedRiskCount = 0 }: ProductionHealthProps) {
   const variance = calculateBudgetVariance(production.financials);
-  const highRiskCount = countHighRiskEvents(risks);
+  const highRiskCount = Math.max(0, countHighRiskEvents(risks) - resolvedRiskCount);
   const variancePercent = (variance / production.financials.approvedBudget) * 100;
 
   return (

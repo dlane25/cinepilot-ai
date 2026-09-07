@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import { ProductionOptimizationResponse } from "../../types/optimization";
 import { formatCurrency } from "../../lib/utils/format";
 import {
@@ -13,7 +13,11 @@ import {
   Sparkles
 } from "lucide-react";
 
-export function MultiAgentOptimization() {
+interface MultiAgentOptimizationProps {
+  onCommitImpact?: (savings: number, daysSaved: number, risksReduced: number) => void;
+}
+
+export function MultiAgentOptimization({ onCommitImpact }: MultiAgentOptimizationProps = {}) {
   const [loading, setLoading] = useState<boolean>(false);
   const [activeStep, setActiveStep] = useState<number>(0);
   const [error, setError] = useState<string | null>(null);
@@ -174,8 +178,12 @@ export function MultiAgentOptimization() {
   const baselineDays = 31;
   const baselineRisks = 7;
 
+  useEffect(() => {
+  onCommitImpact?.(approvedSavings, approvedDaysSaved, approvedRisksReduced);
+  }, [approvedSavings, approvedDaysSaved, approvedRisksReduced, onCommitImpact]);
+
   return (
-    <div className="space-y-8">
+  <div className="space-y-8">
 
       {/* Header and trigger action */}
       <div className="bg-slate-900 border border-slate-800 rounded-xl p-6 flex flex-wrap justify-between items-center gap-4">

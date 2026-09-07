@@ -3,7 +3,7 @@
 import React, { useState, useEffect } from "react";
 import { DecisionRecord } from "../../types/governance";
 import { formatCurrency } from "../../lib/utils/format";
-import { Database, User } from "lucide-react";
+import { Database, User, Loader2, AlertCircle } from "lucide-react";
 
 interface DecisionAuditTrailProps {
   refreshTrigger?: number;
@@ -11,23 +11,38 @@ interface DecisionAuditTrailProps {
 
 export function DecisionAuditTrail({ refreshTrigger = 0 }: DecisionAuditTrailProps) {
   const [auditLedger, setAuditLedger] = useState<DecisionRecord[]>([]);
+  const [loading, setLoading] = useState<boolean>(true);
+  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    let active = true;
+    const controller = new AbortController();
     const loadAuditLedger = async () => {
+      setLoading(true);
+      setError(null);
       try {
-        const res = await fetch("/api/production-memory/decisions/history?production_id=prod-echopoint-001");
-        if (res.ok && active) {
+        const res = await fetch("/api/production-memory/decisions/history?production_id=prod-echopoint-001", {
+          cache: "no-store",
+          signal: controller.signal
+        });
+        if (res.ok) {
           const data = await res.json();
           setAuditLedger(data.decisions || []);
+        } else {
+          setError("Failed to load decision history from production memory.");
         }
-      } catch (err) {
+      } catch (err: unknown) {
+        if (err instanceof Error && err.name === "AbortError") {
+          return;
+        }
         console.warn("[FRONTEND] Failed to fetch decisions audit history:", err);
+        setError("An error occurred while connecting to the audit ledger.");
+      } finally {
+        setLoading(false);
       }
     };
     loadAuditLedger();
     return () => {
-      active = false;
+      controller.abort();
     };
   }, [refreshTrigger]);
 
@@ -55,73 +70,94 @@ export function DecisionAuditTrail({ refreshTrigger = 0 }: DecisionAuditTrailPro
             </tr>
           </thead>
           <tbody className="divide-y divide-slate-850">
-            {auditLedger.map((dec, idx) => (
-              <tr key={idx} className="hover:bg-slate-900/40 transition-colors">
-                <td className="py-3.5 pr-4 align-top">
-                  <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full border uppercase ${
-                    dec.decision === "Approved" ? "bg-emerald-500/10 border-emerald-500/20 text-emerald-400" : "bg-rose-500/10 border-rose-500/20 text-rose-400"
-                  }`}>
-                    {dec.decision.toUpperCase()}
-                  </span>
-                </td>
-                <td className="py-3.5 pr-4 text-slate-300 align-top">
-                  <div className="flex items-start gap-1.5">
-                    <User className="w-3.5 h-3.5 text-slate-500 mt-0.5 shrink-0" />
-                    <div className="min-w-0">
-                      <span className="font-semibold block truncate">{dec.actor_name}</span>
-                      <span className="text-[9px] text-slate-500 block uppercase font-bold truncate">{dec.actor_type.replace(/_/g, " ")}</span>
-                    </div>
-                  </div>
-                </td>
-                <td className="py-3.5 pr-4 text-slate-400 font-mono text-[10px] break-all align-top">
-                  {dec.recommendation_id}
-                </td>
-                <td className="py-3.5 pr-4 text-[10px] uppercase tracking-wider align-top">
-                  <div className="flex flex-wrap items-center gap-1">
-                    <span className="text-slate-500 font-semibold">{dec.previous_state || "&mdash;"}</span>
-                    <span className="text-slate-700 font-bold">&rarr;</span>
-                    <span className={`font-bold ${
-                      dec.new_state === "APPROVED" ? "text-emerald-400" :
-                      dec.new_state === "REJECTED" ? "text-rose-400" :
-                      "text-slate-300"
-                    }`}>{dec.new_state || "&mdash;"}</span>
-                  </div>
-                </td>
-                <td className="py-3.5 pr-4 align-top">
-                  <div className="text-slate-300 space-y-1">
-                    {parseFloat(String(dec.projected_savings)) > 0 && (
-                      <span className="text-emerald-400 font-bold block">{formatCurrency(parseFloat(String(dec.projected_savings)))}</span>
-                    )}
-                    {parseInt(String(dec.shooting_days_saved)) > 0 && (
-                      <span className="text-indigo-400 block leading-tight">{dec.shooting_days_saved} Days Saved</span>
-                    )}
-                    {parseInt(String(dec.risks_reduced)) > 0 && (
-                      <span className="text-rose-400 block leading-tight">{dec.risks_reduced} Risks Reduced</span>
-                    )}
-                    {parseFloat(String(dec.projected_savings)) === 0 && parseInt(String(dec.shooting_days_saved)) === 0 && (
-                      <span className="text-slate-500 italic block leading-tight">None</span>
-                    )}
-                  </div>
-                </td>
-                <td className="py-3.5 pr-4 text-slate-400 align-top">
-                  <p className="text-[11px] leading-snug break-words" title={dec.notes}>
-                    {dec.notes}
-                  </p>
-                </td>
-                <td className="py-3.5 text-right align-top">
-                  <div className="font-mono text-slate-500 text-[10px] whitespace-nowrap">
-                    {new Date(dec.decided_at).toLocaleDateString()}
-                  </div>
-                  <div className="font-mono text-slate-600 text-[9px] whitespace-nowrap">
-                    {new Date(dec.decided_at).toLocaleTimeString()}
-                  </div>
-                </td>
-              </tr>
-            ))}
-            {auditLedger.length === 0 && (
+            {loading ? (
               <tr>
-                <td colSpan={7} className="text-center py-10 text-xs text-slate-600 italic">No human decisions logged in production memory yet. Execute review decisions above to begin auditing.</td>
+                <td colSpan={7} className="text-center py-10">
+                  <div className="flex flex-col items-center justify-center text-slate-500">
+                    <Loader2 className="w-5 h-5 animate-spin text-indigo-400 mb-2" />
+                    <span className="text-xs font-medium">Loading human decision history...</span>
+                  </div>
+                </td>
               </tr>
+            ) : error ? (
+              <tr>
+                <td colSpan={7} className="text-center py-10">
+                  <div className="flex flex-col items-center justify-center text-rose-400/80">
+                    <AlertCircle className="w-5 h-5 mb-2" />
+                    <span className="text-xs font-medium">{error}</span>
+                  </div>
+                </td>
+              </tr>
+            ) : auditLedger.length === 0 ? (
+              <tr>
+                <td colSpan={7} className="text-center py-10 text-xs text-slate-600 italic">
+                  No human decisions logged in production memory yet. Execute review decisions above to begin auditing.
+                </td>
+              </tr>
+            ) : (
+              auditLedger.map((dec, idx) => (
+                <tr key={idx} className="hover:bg-slate-900/40 transition-colors">
+                  <td className="py-3.5 pr-4 align-top">
+                    <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full border uppercase ${
+                      dec.decision === "Approved" ? "bg-emerald-500/10 border-emerald-500/20 text-emerald-400" : "bg-rose-500/10 border-rose-500/20 text-rose-400"
+                    }`}>
+                      {dec.decision.toUpperCase()}
+                    </span>
+                  </td>
+                  <td className="py-3.5 pr-4 text-slate-300 align-top">
+                    <div className="flex items-start gap-1.5">
+                      <User className="w-3.5 h-3.5 text-slate-500 mt-0.5 shrink-0" />
+                      <div className="min-w-0">
+                        <span className="font-semibold block truncate">{dec.actor_name}</span>
+                        <span className="text-[9px] text-slate-500 block uppercase font-bold truncate">{dec.actor_type.replace(/_/g, " ")}</span>
+                      </div>
+                    </div>
+                  </td>
+                  <td className="py-3.5 pr-4 text-slate-400 font-mono text-[10px] break-all align-top">
+                    {dec.recommendation_id}
+                  </td>
+                  <td className="py-3.5 pr-4 text-[10px] uppercase tracking-wider align-top">
+                    <div className="flex flex-wrap items-center gap-1">
+                      <span className="text-slate-500 font-semibold">{dec.previous_state || "&mdash;"}</span>
+                      <span className="text-slate-700 font-bold">&rarr;</span>
+                      <span className={`font-bold ${
+                        dec.new_state === "APPROVED" ? "text-emerald-400" :
+                        dec.new_state === "REJECTED" ? "text-rose-400" :
+                        "text-slate-300"
+                      }`}>{dec.new_state || "&mdash;"}</span>
+                    </div>
+                  </td>
+                  <td className="py-3.5 pr-4 align-top">
+                    <div className="text-slate-300 space-y-1">
+                      {parseFloat(String(dec.projected_savings)) > 0 && (
+                        <span className="text-emerald-400 font-bold block">{formatCurrency(parseFloat(String(dec.projected_savings)))}</span>
+                      )}
+                      {parseInt(String(dec.shooting_days_saved)) > 0 && (
+                        <span className="text-indigo-400 block leading-tight">{dec.shooting_days_saved} Days Saved</span>
+                      )}
+                      {parseInt(String(dec.risks_reduced)) > 0 && (
+                        <span className="text-rose-400 block leading-tight">{dec.risks_reduced} Risks Reduced</span>
+                      )}
+                      {parseFloat(String(dec.projected_savings)) === 0 && parseInt(String(dec.shooting_days_saved)) === 0 && (
+                        <span className="text-slate-500 italic block leading-tight">None</span>
+                      )}
+                    </div>
+                  </td>
+                  <td className="py-3.5 pr-4 text-slate-400 align-top">
+                    <p className="text-[11px] leading-snug break-words" title={dec.notes}>
+                      {dec.notes}
+                    </p>
+                  </td>
+                  <td className="py-3.5 text-right align-top">
+                    <div className="font-mono text-slate-500 text-[10px] whitespace-nowrap">
+                      {new Date(dec.decided_at).toLocaleDateString()}
+                    </div>
+                    <div className="font-mono text-slate-600 text-[9px] whitespace-nowrap">
+                      {new Date(dec.decided_at).toLocaleTimeString()}
+                    </div>
+                  </td>
+                </tr>
+              ))
             )}
           </tbody>
         </table>
