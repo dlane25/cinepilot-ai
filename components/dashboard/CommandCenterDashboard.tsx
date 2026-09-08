@@ -41,6 +41,7 @@ import { Cpu, Play, Loader2, AlertCircle, RefreshCw, Database, Clock } from "luc
 
 type AnalysisState = "IDLE" | "ANALYZING" | "SUCCESS" | "ERROR";
 type DashboardMode = "DEMO" | "LIVE";
+type MemoryStatus = "LOADING" | "CONNECTED" | "UNAVAILABLE";
 
 interface HistoricalAnalysisRun {
   scene_number: string;
@@ -77,6 +78,7 @@ export function CommandCenterDashboard() {
 
   // ClickHouse Production Memory state
   const [memoryHistory, setMemoryHistory] = useState<MemoryHistoryState | null>(null);
+  const [memoryStatus, setMemoryStatus] = useState<MemoryStatus>("LOADING");
   const [refreshTrigger, setRefreshTrigger] = useState(0);
 
   // Global committed impact state from MultiAgentOptimization approvals
@@ -98,14 +100,21 @@ export function CommandCenterDashboard() {
   useEffect(() => {
     let active = true;
     const loadMemory = async () => {
+      setMemoryStatus("LOADING");
       try {
         const res = await fetch("/api/production-memory/history?production_id=prod-echopoint-001");
         if (res.ok && active) {
           const data = await res.json();
           setMemoryHistory(data);
+          setMemoryStatus("CONNECTED");
+        } else if (!res.ok && active) {
+          setMemoryStatus("UNAVAILABLE");
         }
       } catch (err) {
-        console.warn("[FRONTEND] Failed to connect to ClickHouse memory service:", err);
+        if (active) {
+          console.warn("[FRONTEND] Failed to connect to ClickHouse memory service:", err);
+          setMemoryStatus("UNAVAILABLE");
+        }
       }
     };
     loadMemory();
@@ -404,6 +413,19 @@ export function CommandCenterDashboard() {
               ACTIVE: Viewing Static Screenplay Fixture (Echo Point)
             </div>
           )}
+
+          <div className={`text-[10px] uppercase font-bold px-2.5 py-1 rounded border flex items-center gap-1.5 ${
+            memoryStatus === "CONNECTED" ? "bg-emerald-500/10 border-emerald-500/20 text-emerald-400" :
+            memoryStatus === "UNAVAILABLE" ? "bg-rose-500/10 border-rose-500/20 text-rose-400" :
+            "bg-slate-800 border-slate-700 text-slate-400"
+          }`}>
+            <span className={`w-1.5 h-1.5 rounded-full ${
+              memoryStatus === "CONNECTED" ? "bg-emerald-400" :
+              memoryStatus === "UNAVAILABLE" ? "bg-rose-400" :
+              "bg-slate-500 animate-pulse"
+            }`} />
+            ClickHouse MCP • {memoryStatus === "LOADING" ? "Connecting" : memoryStatus === "CONNECTED" ? "Connected" : "Unavailable"}
+          </div>
         </div>
 
         {/* Action Button */}
