@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useCallback } from "react";
 import {
   echoPointProduction,
   echoPointInsights,
@@ -18,6 +18,7 @@ import { LiveAnalysisSummary } from "./LiveAnalysisSummary";
 import { ProductionHeader } from "../layout/ProductionHeader";
 import { ScreenplayIntelligence } from "../screenplay/ScreenplayIntelligence";
 import { MultiAgentOptimization } from "./MultiAgentOptimization";
+import { DecisionAuditTrail } from "./DecisionAuditTrail";
 
 import {
   ProductionAnalysisResponse,
@@ -36,10 +37,11 @@ import {
 } from "../../lib/mappers/production-analysis";
 
 import { generateImpactProjection } from "../../lib/domain/calculations";
-import { Cpu, Play, Loader2, AlertCircle, RefreshCw, Database, Clock, CheckSquare } from "lucide-react";
+import { Cpu, Play, Loader2, AlertCircle, RefreshCw, Database, Clock } from "lucide-react";
 
 type AnalysisState = "IDLE" | "ANALYZING" | "SUCCESS" | "ERROR";
 type DashboardMode = "DEMO" | "LIVE";
+type MemoryStatus = "LOADING" | "CONNECTED" | "UNAVAILABLE";
 
 interface HistoricalAnalysisRun {
   scene_number: string;
@@ -64,7 +66,7 @@ interface MemoryHistoryState {
 }
 
 export function CommandCenterDashboard() {
-  const [activeTab, setActiveTab] = useState<"PRODUCTION" | "SCREENPLAY" | "OPTIMIZATION">("PRODUCTION");
+  const [activeTab, setActiveTab] = useState<"PRODUCTION" | "SCREENPLAY" | "OPTIMIZATION" | "DECISIONS">("PRODUCTION");
   const [state, setState] = useState<AnalysisState>("IDLE");
   const [mode, setMode] = useState<DashboardMode>("DEMO");
   const [rawResponse, setRawResponse] = useState<ProductionAnalysisResponse | null>(null);
@@ -76,19 +78,47 @@ export function CommandCenterDashboard() {
 
   // ClickHouse Production Memory state
   const [memoryHistory, setMemoryHistory] = useState<MemoryHistoryState | null>(null);
+  const [memoryStatus, setMemoryStatus] = useState<MemoryStatus>("LOADING");
   const [refreshTrigger, setRefreshTrigger] = useState(0);
+
+  // Global committed impact state from MultiAgentOptimization approvals
+  const [committedImpact, setCommittedImpact] = useState({ savings: 0, daysSaved: 0, risksReduced: 0 });
+
+  const handleCommitImpact = useCallback((savings: number, days: number, risks: number) => {
+    setCommittedImpact({ savings, daysSaved: days, risksReduced: risks });
+  }, []);
+
+  useEffect(() => {
+    const handleHashChange = () => {
+      if (window.location.hash === "#decisions") {
+        setActiveTab("DECISIONS");
+      } else if (window.location.hash === "" || window.location.hash === "#") {
+        setActiveTab("PRODUCTION");
+      }
+    };
+    handleHashChange();
+    window.addEventListener("hashchange", handleHashChange);
+    return () => window.removeEventListener("hashchange", handleHashChange);
+  }, []);
 
   useEffect(() => {
     let active = true;
     const loadMemory = async () => {
+      setMemoryStatus("LOADING");
       try {
         const res = await fetch("/api/production-memory/history?production_id=prod-echopoint-001");
         if (res.ok && active) {
           const data = await res.json();
           setMemoryHistory(data);
+          setMemoryStatus("CONNECTED");
+        } else if (!res.ok && active) {
+          setMemoryStatus("UNAVAILABLE");
         }
       } catch (err) {
-        console.warn("[FRONTEND] Failed to connect to ClickHouse memory service:", err);
+        if (active) {
+          console.warn("[FRONTEND] Failed to connect to ClickHouse memory service:", err);
+          setMemoryStatus("UNAVAILABLE");
+        }
       }
     };
     loadMemory();
@@ -176,7 +206,11 @@ export function CommandCenterDashboard() {
           recommendation_id: id,
           production_id: "prod-echopoint-001",
           decision: "Approved",
-          notes: "Approved via ClickHouse human-in-the-loop audit trail."
+          notes: "Approved via ClickHouse human-in-the-loop audit trail.",
+          new_state: "APPROVED",
+          previous_state: "Pending Review",
+          actor_name: "Production Executive",
+          actor_type: "human_demo_operator"
         }),
       });
       // Refresh the historical trigger
@@ -211,7 +245,11 @@ export function CommandCenterDashboard() {
           recommendation_id: id,
           production_id: "prod-echopoint-001",
           decision: "Rejected",
-          notes: "Rejected via ClickHouse human-in-the-loop audit trail."
+          notes: "Rejected via ClickHouse human-in-the-loop audit trail.",
+          new_state: "REJECTED",
+          previous_state: "Pending Review",
+          actor_name: "Production Executive",
+          actor_type: "human_demo_operator"
         }),
       });
       // Refresh the historical trigger
@@ -222,14 +260,14 @@ export function CommandCenterDashboard() {
   };
 
   // Resolve dynamic dashboard datasets depending on active mode (DEMO vs LIVE)
-  let activeProduction: Production = echoPointProduction;
+  let baseProduction: Production = echoPointProduction;
   let activeRisks: ProductionRisk[] = echoPointRisks;
   let activeInsights: ProductionInsight[] = echoPointInsights;
   let activeRecs: ProductionRecommendation[] = demoRecommendations;
   let activeProjection: ImpactProjection = echoPointImpactProjection;
 
   if (mode === "LIVE" && rawResponse) {
-    activeProduction = mapLiveProduction(rawResponse, echoPointProduction);
+    baseProduction = mapLiveProduction(rawResponse, echoPointProduction);
     activeRisks = mapLiveRisks(rawResponse);
     activeInsights = mapLiveInsights(rawResponse);
     activeRecs = liveRecommendations;
@@ -237,13 +275,27 @@ export function CommandCenterDashboard() {
     // Recalculate impact projection dynamically based on actual live findings!
     activeProjection = generateImpactProjection(
       echoPointProduction.financials.projectedSpend,
-      activeProduction.financials.projectedSpend,
+      baseProduction.financials.projectedSpend,
       echoPointProduction.schedule.plannedShootingDays,
       echoPointProduction.schedule.plannedShootingDays - (rawResponse.producer_analysis.schedule_implications ? 1 : 0),
       echoPointRisks.filter(r => r.severity === "Critical" || r.severity === "High").length,
       activeRisks.filter(r => r.severity === "Critical" || r.severity === "High").length
     );
   }
+
+  // APPLY DETERMINISTIC COMMITTED IMPACT (The Finish Line)
+  // Derive a new activeProduction via immutable object spreads
+  const activeProduction: Production = {
+    ...baseProduction,
+    financials: {
+      ...baseProduction.financials,
+      projectedSpend: baseProduction.financials.projectedSpend - committedImpact.savings
+    },
+    schedule: {
+      ...baseProduction.schedule,
+      plannedShootingDays: baseProduction.schedule.plannedShootingDays - committedImpact.daysSaved
+    }
+  };
 
   return (
     <>
@@ -253,7 +305,10 @@ export function CommandCenterDashboard() {
       {/* Tab Switcher */}
       <div className="px-8 py-2.5 border-b border-slate-800 bg-slate-950 flex gap-5">
         <button
-          onClick={() => setActiveTab("PRODUCTION")}
+          onClick={() => {
+            setActiveTab("PRODUCTION");
+            window.location.hash = "";
+          }}
           className={`text-sm font-bold pb-2 border-b-2 transition-all ${
             activeTab === "PRODUCTION"
               ? "border-indigo-500 text-white"
@@ -263,7 +318,10 @@ export function CommandCenterDashboard() {
           Production Command Center
         </button>
         <button
-          onClick={() => setActiveTab("SCREENPLAY")}
+          onClick={() => {
+            setActiveTab("SCREENPLAY");
+            window.location.hash = "";
+          }}
           className={`text-sm font-bold pb-2 border-b-2 transition-all ${
             activeTab === "SCREENPLAY"
               ? "border-indigo-500 text-white"
@@ -273,7 +331,10 @@ export function CommandCenterDashboard() {
           Screenplay Intelligence
         </button>
         <button
-          onClick={() => setActiveTab("OPTIMIZATION")}
+          onClick={() => {
+            setActiveTab("OPTIMIZATION");
+            window.location.hash = "";
+          }}
           className={`text-sm font-bold pb-2 border-b-2 transition-all ${
             activeTab === "OPTIMIZATION"
               ? "border-indigo-500 text-white"
@@ -281,6 +342,19 @@ export function CommandCenterDashboard() {
           }`}
         >
           Multi-Agent Optimization
+        </button>
+        <button
+          onClick={() => {
+            setActiveTab("DECISIONS");
+            window.location.hash = "#decisions";
+          }}
+          className={`text-sm font-bold pb-2 border-b-2 transition-all ${
+            activeTab === "DECISIONS"
+              ? "border-indigo-500 text-white"
+              : "border-transparent text-slate-500 hover:text-slate-300"
+          }`}
+        >
+          Human Decisions
         </button>
       </div>
 
@@ -290,7 +364,14 @@ export function CommandCenterDashboard() {
         </div>
       ) : activeTab === "OPTIMIZATION" ? (
         <div className="p-6 md:p-8 max-w-[1600px] mx-auto">
-          <MultiAgentOptimization />
+          <MultiAgentOptimization
+            approvedBudget={echoPointProduction.financials.approvedBudget}
+            onCommitImpact={handleCommitImpact}
+          />
+        </div>
+      ) : activeTab === "DECISIONS" ? (
+        <div className="p-6 md:p-8 max-w-[1600px] mx-auto">
+          <DecisionAuditTrail refreshTrigger={refreshTrigger} />
         </div>
       ) : (
         <>
@@ -335,6 +416,19 @@ export function CommandCenterDashboard() {
               ACTIVE: Viewing Static Screenplay Fixture (Echo Point)
             </div>
           )}
+
+          <div className={`text-[10px] uppercase font-bold px-2.5 py-1 rounded border flex items-center gap-1.5 ${
+            memoryStatus === "CONNECTED" ? "bg-emerald-500/10 border-emerald-500/20 text-emerald-400" :
+            memoryStatus === "UNAVAILABLE" ? "bg-rose-500/10 border-rose-500/20 text-rose-400" :
+            "bg-slate-800 border-slate-700 text-slate-400"
+          }`}>
+            <span className={`w-1.5 h-1.5 rounded-full ${
+              memoryStatus === "CONNECTED" ? "bg-emerald-400" :
+              memoryStatus === "UNAVAILABLE" ? "bg-rose-400" :
+              "bg-slate-500 animate-pulse"
+            }`} />
+            ClickHouse MCP • {memoryStatus === "LOADING" ? "Connecting" : memoryStatus === "CONNECTED" ? "Connected" : "Unavailable"}
+          </div>
         </div>
 
         {/* Action Button */}
@@ -401,6 +495,7 @@ export function CommandCenterDashboard() {
         <ProductionHealth
           production={activeProduction}
           risks={activeRisks}
+          resolvedRiskCount={committedImpact.risksReduced}
         />
 
         <ImpactSummary
@@ -471,40 +566,25 @@ export function CommandCenterDashboard() {
                 </div>
               </div>
 
-              {/* Historical Decisions / Audit Trail Card */}
-              <div className="bg-slate-900/60 border border-slate-800/80 rounded-xl p-5 flex flex-col h-[340px]">
-                <div className="flex items-center justify-between mb-4 pb-2 border-b border-slate-800/50">
-                  <div className="flex items-center gap-1.5 text-sm font-semibold text-slate-300">
-                    <CheckSquare className="w-4 h-4 text-emerald-400" />
-                    <h4>Governance & Decision Log</h4>
-                  </div>
-                  <span className="text-xs font-semibold text-slate-500 bg-slate-950 px-2 py-0.5 rounded-full border border-slate-800">
-                    {memoryHistory.recommendations.filter(r => r.approval_state !== "Pending Review").length} Decisions
-                  </span>
+              {/* Human Decision Audit Callout Card */}
+              <div className="bg-slate-900/60 border border-slate-800/80 rounded-xl p-6 flex flex-col justify-center items-center text-center h-[340px]">
+                <div className="w-12 h-12 bg-slate-950 border border-slate-800 rounded-full flex items-center justify-center mb-4">
+                  <Database className="w-6 h-6 text-indigo-400" />
                 </div>
-
-                <div className="flex-1 overflow-y-auto space-y-2 pr-1 custom-scrollbar">
-                  {memoryHistory.recommendations.map((rec, i) => (
-                    <div key={i} className="bg-slate-950 border border-slate-850 p-3 rounded-lg flex justify-between items-center hover:border-slate-700 transition-colors">
-                      <div className="flex-1 min-w-0 pr-3">
-                        <p className="text-xs font-semibold text-slate-300 truncate mb-1">{rec.title}</p>
-                        <p className="text-[10px] text-slate-500 line-clamp-1">Impact: {parseFloat(String(rec.projected_savings)).toLocaleString('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 })} | Confidence: {(rec.confidence * 100).toFixed(0)}%</p>
-                      </div>
-                      <div className="flex-shrink-0 text-right">
-                        <span className={`text-[10px] px-2 py-0.5 rounded-full border font-bold inline-flex items-center gap-1 uppercase ${
-                          rec.approval_state === "Approved" ? "bg-emerald-500/10 border-emerald-500/20 text-emerald-400" :
-                          rec.approval_state === "Rejected" ? "bg-rose-500/10 border-rose-500/20 text-rose-400" :
-                          "bg-amber-500/10 border-amber-500/20 text-amber-300 animate-pulse"
-                        }`}>
-                          {rec.approval_state}
-                        </span>
-                      </div>
-                    </div>
-                  ))}
-                  {memoryHistory.recommendations.length === 0 && (
-                    <div className="text-center py-12 text-xs text-slate-600 italic">No governance logs recorded in ClickHouse.</div>
-                  )}
-                </div>
+                <h4 className="text-lg font-bold text-slate-200 mb-2">Human Decision Audit</h4>
+                <p className="text-sm text-slate-400 mb-6 max-w-sm">
+                  Human-approved production changes are recorded in the immutable ClickHouse decision ledger.
+                </p>
+                <button
+                  onClick={() => {
+                    setActiveTab("DECISIONS");
+                    window.location.hash = "#decisions";
+                  }}
+                  className="px-5 py-2.5 bg-slate-800 hover:bg-slate-700 border border-slate-700 text-white text-sm font-bold rounded-lg transition-colors flex items-center gap-2"
+                >
+                  <Database className="w-4 h-4 text-indigo-400" />
+                  View Decision Audit Trail
+                </button>
               </div>
 
             </div>
