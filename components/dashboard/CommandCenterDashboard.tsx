@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useCallback } from "react";
 import {
   echoPointProduction,
   echoPointInsights,
@@ -83,6 +83,10 @@ export function CommandCenterDashboard() {
 
   // Global committed impact state from MultiAgentOptimization approvals
   const [committedImpact, setCommittedImpact] = useState({ savings: 0, daysSaved: 0, risksReduced: 0 });
+
+  const handleCommitImpact = useCallback((savings: number, days: number, risks: number) => {
+    setCommittedImpact({ savings, daysSaved: days, risksReduced: risks });
+  }, []);
 
   useEffect(() => {
     const handleHashChange = () => {
@@ -361,9 +365,8 @@ export function CommandCenterDashboard() {
       ) : activeTab === "OPTIMIZATION" ? (
         <div className="p-6 md:p-8 max-w-[1600px] mx-auto">
           <MultiAgentOptimization
-            onCommitImpact={(savings, days, risks) => {
-              setCommittedImpact({ savings, daysSaved: days, risksReduced: risks });
-            }}
+            approvedBudget={echoPointProduction.financials.approvedBudget}
+            onCommitImpact={handleCommitImpact}
           />
         </div>
       ) : activeTab === "DECISIONS" ? (

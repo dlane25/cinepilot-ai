@@ -14,10 +14,11 @@ import {
 } from "lucide-react";
 
 interface MultiAgentOptimizationProps {
+  approvedBudget?: number;
   onCommitImpact?: (savings: number, daysSaved: number, risksReduced: number) => void;
 }
 
-export function MultiAgentOptimization({ onCommitImpact }: MultiAgentOptimizationProps = {}) {
+export function MultiAgentOptimization({ approvedBudget, onCommitImpact }: MultiAgentOptimizationProps = {}) {
   const [loading, setLoading] = useState<boolean>(false);
   const [activeStep, setActiveStep] = useState<number>(0);
   const [error, setError] = useState<string | null>(null);
@@ -346,6 +347,17 @@ export function MultiAgentOptimization({ onCommitImpact }: MultiAgentOptimizatio
                       <span className="text-xs text-slate-400 block">Pending: {formatCurrency(pendingSavings)}</span>
                     </div>
                   </div>
+
+                  {approvedBudget !== undefined && (() => {
+                    const targetOptimizedSpend = baselineSpend - (approvedSavings + pendingSavings);
+                    const gap = targetOptimizedSpend - approvedBudget;
+                    return (
+                      <div className="bg-amber-500/5 border border-amber-500/10 px-2.5 py-1.5 rounded flex justify-between items-center">
+                        <span className="text-[10px] text-slate-400 font-bold uppercase tracking-wider">Approved Budget Goal • {formatCurrency(approvedBudget)}</span>
+                        <span className="text-[10px] text-amber-400/90 font-medium">Projected gap: {formatCurrency(gap)} above</span>
+                      </div>
+                    );
+                  })()}
 
                   {/* Day Impact */}
                   <div className="bg-slate-950 p-2.5 rounded border border-slate-850 flex justify-between items-center">
